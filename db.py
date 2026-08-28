@@ -79,6 +79,20 @@ class Database:
                 {"owner_id": owner_id},
             ).mappings().all()
 
+    def list_events_in_range(self, range_start: str, range_end: str, owner_id: str = None):
+        "Events whose [start_date, end_date] overlaps [range_start, range_end], inclusive."
+        query = (
+            f"SELECT {_EVENT_COLUMNS} FROM calendar_events "
+            "WHERE start_date <= :range_end AND end_date >= :range_start"
+        )
+        params = {"range_start": range_start, "range_end": range_end}
+        if owner_id:
+            query += " AND owner_id = :owner_id"
+            params["owner_id"] = owner_id
+        query += " ORDER BY start_date, start_time"
+        with self.engine.connect() as db_connection:
+            return db_connection.execute(text(query), params).mappings().all()
+
     def get_event(self, event_id: int):
         with self.engine.connect() as db_connection:
             return db_connection.execute(

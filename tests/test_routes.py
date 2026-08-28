@@ -1,6 +1,16 @@
 import db
 from family import FAMILY_MEMBERS
 
+CAL_YEAR = 2026
+CAL_MONTH = 9
+
+
+def _calendar_url(year=CAL_YEAR, month=CAL_MONTH, member_id=None):
+    url = f"/calendar?year={year}&month={month}"
+    if member_id:
+        url += f"&member_id={member_id}"
+    return url
+
 
 def test_home_page_returns_200(client):
     response = client.get("/")
@@ -106,77 +116,151 @@ def test_calendar_page_returns_200_after_switching_user(client):
     assert response.status_code == 200
 
 
-def test_add_event_appears_on_calendar_page(client):
+def test_calendar_page_shows_weekday_headers(client):
     client.post("/calendar/switch-user", data={"member_id": FAMILY_MEMBERS[0]["id"]})
-    client.post("/calendar", data={"title": "Soccer Practice", "start_date": "2026-09-01"})
-    response = client.get("/calendar")
+    response = client.get(_calendar_url())
+    assert "Sun" in response.text
+
+
+def test_add_event_appears_on_calendar_grid(client):
+    client.post("/calendar/switch-user", data={"member_id": FAMILY_MEMBERS[0]["id"]})
+    client.post("/calendar", data={"title": "Soccer Practice", "start_date": f"{CAL_YEAR}-{CAL_MONTH:02d}-01"})
+    response = client.get(_calendar_url())
     assert "Soccer Practice" in response.text
 
 
-def test_calendar_me_page_only_shows_own_events(client):
+def test_calendar_grid_shows_event_color_bar_for_owner(client):
     client.post("/calendar/switch-user", data={"member_id": FAMILY_MEMBERS[0]["id"]})
-    client.post("/calendar", data={"title": "Mine", "start_date": "2026-09-01"})
+    client.post("/calendar", data={"title": "Soccer Practice", "start_date": f"{CAL_YEAR}-{CAL_MONTH:02d}-01"})
+    response = client.get(_calendar_url())
+    assert f'background-color: {FAMILY_MEMBERS[0]["color"]}' in response.text
+
+
+def test_calendar_grid_stacks_multiple_events_on_same_day(client):
+    client.post("/calendar/switch-user", data={"member_id": FAMILY_MEMBERS[0]["id"]})
+    client.post("/calendar", data={"title": "First", "start_date": f"{CAL_YEAR}-{CAL_MONTH:02d}-01"})
+    client.post("/calendar", data={"title": "Second", "start_date": f"{CAL_YEAR}-{CAL_MONTH:02d}-01"})
+    response = client.get(_calendar_url())
+    assert response.text.count('class="event-bar"') == 2
+
+
+def test_multi_day_event_shows_bar_on_each_spanned_day(client):
+    client.post("/calendar/switch-user", data={"member_id": FAMILY_MEMBERS[0]["id"]})
+    client.post(
+        "/calendar",
+        data={
+            "title": "Trip",
+            "start_date": f"{CAL_YEAR}-{CAL_MONTH:02d}-01",
+            "end_date": f"{CAL_YEAR}-{CAL_MONTH:02d}-03",
+        },
+    )
+    response = client.get(_calendar_url())
+    assert response.text.count('class="event-bar"') == 3
+
+
+def test_critical_event_adds_critical_day_class(client):
+    client.post("/calendar/switch-user", data={"member_id": FAMILY_MEMBERS[0]["id"]})
+    client.post(
+        "/calendar",
+        data={"title": "Big Day", "start_date": f"{CAL_YEAR}-{CAL_MONTH:02d}-01", "is_critical": "1"},
+    )
+    response = client.get(_calendar_url())
+    assert "critical-day" in response.text
+
+
+def test_non_critical_event_does_not_add_critical_day_class(client):
+    client.post("/calendar/switch-user", data={"member_id": FAMILY_MEMBERS[0]["id"]})
+    client.post("/calendar", data={"title": "Normal Day", "start_date": f"{CAL_YEAR}-{CAL_MONTH:02d}-01"})
+    response = client.get(_calendar_url())
+    assert "critical-day" not in response.text
+
+
+def test_member_filter_shows_selected_members_event(client):
+    client.post("/calendar/switch-user", data={"member_id": FAMILY_MEMBERS[0]["id"]})
+    client.post("/calendar", data={"title": "Mine", "start_date": f"{CAL_YEAR}-{CAL_MONTH:02d}-01"})
+    response = client.get(_calendar_url(member_id=FAMILY_MEMBERS[0]["id"]))
+    assert "Mine" in response.text
+
+
+def test_member_filter_hides_other_members_event(client):
+    client.post("/calendar/switch-user", data={"member_id": FAMILY_MEMBERS[0]["id"]})
+    client.post("/calendar", data={"title": "Mine", "start_date": f"{CAL_YEAR}-{CAL_MONTH:02d}-01"})
     client.post("/calendar/switch-user", data={"member_id": FAMILY_MEMBERS[1]["id"]})
-    client.post("/calendar", data={"title": "Theirs", "start_date": "2026-09-01"})
-    response = client.get("/calendar/me")
-    assert "Theirs" in response.text and "Mine" not in response.text
+    client.post("/calendar", data={"title": "Theirs", "start_date": f"{CAL_YEAR}-{CAL_MONTH:02d}-01"})
+    response = client.get(_calendar_url(member_id=FAMILY_MEMBERS[1]["id"]))
+    assert "Mine" not in response.text
+
+
+def test_month_navigation_shows_events_in_selected_month(client):
+    client.post("/calendar/switch-user", data={"member_id": FAMILY_MEMBERS[0]["id"]})
+    client.post("/calendar", data={"title": "October Trip", "start_date": f"{CAL_YEAR}-10-15"})
+    response = client.get(_calendar_url(month=10))
+    assert "October Trip" in response.text
+
+
+def test_month_navigation_hides_events_outside_selected_month(client):
+    client.post("/calendar/switch-user", data={"member_id": FAMILY_MEMBERS[0]["id"]})
+    client.post("/calendar", data={"title": "October Trip", "start_date": f"{CAL_YEAR}-10-15"})
+    response = client.get(_calendar_url(month=CAL_MONTH))
+    assert "October Trip" not in response.text
+
+
+def test_day_fragment_route_returns_prefilled_add_form(client):
+    client.post("/calendar/switch-user", data={"member_id": FAMILY_MEMBERS[0]["id"]})
+    response = client.get(f"/calendar/day/{CAL_YEAR}-{CAL_MONTH:02d}-05")
+    assert f'value="{CAL_YEAR}-{CAL_MONTH:02d}-05"' in response.text
+
+
+def test_day_fragment_route_lists_existing_events_for_that_day(client):
+    client.post("/calendar/switch-user", data={"member_id": FAMILY_MEMBERS[0]["id"]})
+    client.post("/calendar", data={"title": "Dentist", "start_date": f"{CAL_YEAR}-{CAL_MONTH:02d}-05"})
+    response = client.get(f"/calendar/day/{CAL_YEAR}-{CAL_MONTH:02d}-05")
+    assert "Dentist" in response.text
 
 
 def test_add_event_rejects_blank_title(client):
     client.post("/calendar/switch-user", data={"member_id": FAMILY_MEMBERS[0]["id"]})
-    response = client.post("/calendar", data={"title": "", "start_date": "2026-09-01"})
+    response = client.post("/calendar", data={"title": "", "start_date": f"{CAL_YEAR}-{CAL_MONTH:02d}-01"})
     assert response.status_code == 422
 
 
 def test_add_event_rejects_end_date_before_start_date(client):
     client.post("/calendar/switch-user", data={"member_id": FAMILY_MEMBERS[0]["id"]})
     response = client.post(
-        "/calendar", data={"title": "Bad Range", "start_date": "2026-09-05", "end_date": "2026-09-01"}
+        "/calendar",
+        data={"title": "Bad Range", "start_date": f"{CAL_YEAR}-{CAL_MONTH:02d}-05", "end_date": f"{CAL_YEAR}-{CAL_MONTH:02d}-01"},
     )
     assert response.status_code == 422
 
 
-def test_multi_day_event_renders_as_date_range(client):
+def test_add_event_redirects_to_requested_month_and_member_filter(client):
     client.post("/calendar/switch-user", data={"member_id": FAMILY_MEMBERS[0]["id"]})
-    client.post("/calendar", data={"title": "Trip", "start_date": "2026-09-01", "end_date": "2026-09-05"})
-    response = client.get("/calendar")
-    assert "2026-09-01" in response.text and "2026-09-05" in response.text
-
-
-def test_critical_event_shows_cant_miss_badge(client):
-    client.post("/calendar/switch-user", data={"member_id": FAMILY_MEMBERS[0]["id"]})
-    client.post(
-        "/calendar", data={"title": "Big Day", "start_date": "2026-09-01", "is_critical": "1"}
+    response = client.post(
+        "/calendar",
+        data={
+            "title": "Trip",
+            "start_date": f"{CAL_YEAR}-{CAL_MONTH:02d}-01",
+            "redirect_year": "2026",
+            "redirect_month": "10",
+            "redirect_member_id": FAMILY_MEMBERS[0]["id"],
+        },
+        follow_redirects=False,
     )
-    response = client.get("/calendar")
-    assert "Can't miss" in response.text
+    assert response.headers["location"] == f"/calendar?year=2026&month=10&member_id={FAMILY_MEMBERS[0]['id']}"
 
 
 def test_delete_event_by_non_owner_is_forbidden(client):
     client.post("/calendar/switch-user", data={"member_id": FAMILY_MEMBERS[0]["id"]})
-    client.post("/calendar", data={"title": "Owned", "start_date": "2026-09-01"})
+    client.post("/calendar", data={"title": "Owned", "start_date": f"{CAL_YEAR}-{CAL_MONTH:02d}-01"})
     event_id = db.list_events()[0]["id"]
     client.post("/calendar/switch-user", data={"member_id": FAMILY_MEMBERS[1]["id"]})
     response = client.post(f"/calendar/{event_id}/delete")
     assert response.status_code == 403
 
 
-def test_calendar_page_shows_link_to_my_calendar(client):
-    client.post("/calendar/switch-user", data={"member_id": FAMILY_MEMBERS[0]["id"]})
-    response = client.get("/calendar")
-    assert 'href="/calendar/me"' in response.text
-
-
-def test_my_calendar_page_shows_link_back_to_full_calendar(client):
-    client.post("/calendar/switch-user", data={"member_id": FAMILY_MEMBERS[0]["id"]})
-    response = client.get("/calendar/me")
-    assert 'href="/calendar"' in response.text
-
-
 def test_delete_event_by_owner_removes_it(client):
     client.post("/calendar/switch-user", data={"member_id": FAMILY_MEMBERS[0]["id"]})
-    client.post("/calendar", data={"title": "Owned", "start_date": "2026-09-01"})
+    client.post("/calendar", data={"title": "Owned", "start_date": f"{CAL_YEAR}-{CAL_MONTH:02d}-01"})
     event_id = db.list_events()[0]["id"]
     client.post(f"/calendar/{event_id}/delete")
-    response = client.get("/calendar")
-    assert "Owned" not in response.text
+    assert db.list_events() == []
