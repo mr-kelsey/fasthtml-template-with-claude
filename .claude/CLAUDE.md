@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-FastHTML multipage app with SQLite persistence via SQLAlchemy Core (`text()` queries, no ORM). Docker-ready.
+A suite of family productivity applications accessible to each family member from within the LAN.  Current project: a family calendar to track individual events.
 
 ## Commands
 
