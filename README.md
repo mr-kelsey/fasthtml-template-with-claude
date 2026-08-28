@@ -13,11 +13,15 @@ fasthtml-template/
 ├── pages/
 │   ├── home.py             # GET /
 │   ├── about.py            # GET /about
-│   └── notes.py             # GET/POST /notes, POST /notes/{id}/delete — SQLite CRUD demo
+│   ├── notes.py             # GET/POST /notes, POST /notes/{id}/delete — SQLite CRUD demo
+│   └── calendar.py           # family calendar: switch-user picker, collective + per-person views
+├── family.py                 # loads FAMILY_MEMBERS from family.json (gitignored) or placeholder defaults
 ├── Dockerfile              # containerizes the app (uvicorn, not the dev-only serve())
 ├── docker-compose.yml       # the app, with the SQLite file persisted in a named volume
 ├── tests/                     # pytest suite (db.py unit tests + route integration tests)
 ├── .env.example              # copy to .env and fill in
+├── .env.test                  # DB_PATH used by pytest — kept separate from .env so tests never touch real data
+├── family.example.json       # copy to family.json and fill in real names/colors (gitignored)
 ├── requirements.txt
 └── requirements-dev.txt       # requirements.txt + pytest
 ```
@@ -26,6 +30,7 @@ fasthtml-template/
 
 ```bash
 cp .env.example .env
+cp family.example.json family.json   # fill in real family member names/colors — never committed
 docker compose up --build
 ```
 
@@ -38,6 +43,7 @@ python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env   # edit DB_PATH if you want the SQLite file somewhere other than data/app.db
+cp family.example.json family.json   # fill in real family member names/colors — never committed
 python main.py
 ```
 
@@ -60,7 +66,7 @@ pip install -r requirements-dev.txt
 pytest
 ```
 
-The suite (`tests/`) covers `db.py`'s queries directly and the page routes end-to-end via Starlette's `TestClient`. It connects using the same `.env` config as the app, and truncates the `notes` table before and after every test — don't point it at a database whose notes you want to keep. For full isolation, set `DB_PATH` to a separate file before running `pytest`.
+The suite (`tests/`) covers `db.py`'s queries directly and the page routes end-to-end via Starlette's `TestClient`. It connects using `.env.test` (not `.env`) via `db.Database(".env.test")`, so `pytest` truncates the `notes`/`calendar_events` tables in its own SQLite file (`data/test.db` by default) and never touches the real app database configured in `.env`.
 
 ## Adding a new page
 

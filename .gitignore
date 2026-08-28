@@ -5,3 +5,4 @@ __pycache__/
 .sesskey
 .pytest_cache/
 data/
+family.json

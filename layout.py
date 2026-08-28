@@ -1,6 +1,6 @@
 from fasthtml import common as fast
 
-NAV_LINKS = [("Home", "/"), ("About", "/about"), ("Notes", "/notes")]
+NAV_LINKS = [("Home", "/"), ("About", "/about"), ("Notes", "/notes"), ("Calendar", "/calendar")]
 
 
 def nav():
