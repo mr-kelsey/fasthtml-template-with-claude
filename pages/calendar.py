@@ -85,7 +85,14 @@ def _add_event_form():
 def _identity_banner(current_member_id):
     member = get_member(current_member_id)
     label = f"Viewing as {member['name']}" if member else "No user selected"
-    return fast.P(f"{label} — ", fast.A("Switch User", href="/calendar/switch-user"))
+    return fast.P(
+        f"{label} — ",
+        fast.A("My Calendar", href="/calendar/me"),
+        " · ",
+        fast.A("Everyone's Calendar", href="/calendar"),
+        " · ",
+        fast.A("Switch User", href="/calendar/switch-user"),
+    )
 
 
 @router("/calendar/switch-user", methods=["get"])

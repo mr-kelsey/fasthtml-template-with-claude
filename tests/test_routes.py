@@ -161,6 +161,18 @@ def test_delete_event_by_non_owner_is_forbidden(client):
     assert response.status_code == 403
 
 
+def test_calendar_page_shows_link_to_my_calendar(client):
+    client.post("/calendar/switch-user", data={"member_id": FAMILY_MEMBERS[0]["id"]})
+    response = client.get("/calendar")
+    assert 'href="/calendar/me"' in response.text
+
+
+def test_my_calendar_page_shows_link_back_to_full_calendar(client):
+    client.post("/calendar/switch-user", data={"member_id": FAMILY_MEMBERS[0]["id"]})
+    response = client.get("/calendar/me")
+    assert 'href="/calendar"' in response.text
+
+
 def test_delete_event_by_owner_removes_it(client):
     client.post("/calendar/switch-user", data={"member_id": FAMILY_MEMBERS[0]["id"]})
     client.post("/calendar", data={"title": "Owned", "start_date": "2026-09-01"})
