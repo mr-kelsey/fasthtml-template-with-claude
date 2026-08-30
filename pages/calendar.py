@@ -110,7 +110,7 @@ def _month_nav(year, month, member_id):
     )
 
 
-def _filter_row(year, month, member_id, session_member_id):
+def _filter_row(year, month, member_id):
     def link(label, target_member_id, is_active):
         href = f"/calendar?year={year}&month={month}"
         if target_member_id:
@@ -119,14 +119,7 @@ def _filter_row(year, month, member_id, session_member_id):
 
     links = [link("Everyone", None, member_id is None)]
     links += [link(member["name"], member["id"], member_id == member["id"]) for member in FAMILY_MEMBERS]
-    links.append(link("Me", session_member_id, member_id == session_member_id))
     return fast.Div(*links, cls="filter-row")
-
-
-def _identity_banner(current_member_id):
-    member = get_member(current_member_id)
-    label = f"Viewing as {member['name']}" if member else "No user selected"
-    return fast.P(f"{label} — ", fast.A("Switch User", href="/calendar/switch-user"))
 
 
 def _event_dialog():
@@ -162,33 +155,10 @@ def _delete_event_form(event_id, year, month, member_id):
     )
 
 
-@router("/calendar/switch-user", methods=["get"])
-def switch_user_page():
-    pickers = [
-        fast.Form(
-            fast.Input(type="hidden", name="member_id", value=member["id"]),
-            fast.Button(member["name"], type="submit", style=f"background-color: {member['color']}; border-color: {member['color']};"),
-            method="post",
-            action="/calendar/switch-user",
-        )
-        for member in FAMILY_MEMBERS
-    ]
-    return layout("Switch User", fast.H1("Who's using the calendar?"), *pickers)
-
-
-@router("/calendar/switch-user", methods=["post"])
-def switch_user_route(sess, member_id: str):
-    if get_member(member_id) is None:
-        return fast.Response("Unknown family member.", status_code=422)
-    sess["member_id"] = member_id
-    return fast.Redirect("/calendar")
-
-
 @router("/calendar", methods=["get"])
 def calendar_page(sess, year: int = None, month: int = None, member_id: str = None):
-    session_member_id = sess.get("member_id")
-    if session_member_id is None:
-        return fast.Redirect("/calendar/switch-user")
+    if member_id and get_member(member_id) is not None:
+        sess["member_id"] = member_id
     today = date.today()
     year = year or today.year
     month = month or today.month
@@ -199,9 +169,8 @@ def calendar_page(sess, year: int = None, month: int = None, member_id: str = No
     return layout(
         "Calendar",
         fast.H1("Family Calendar"),
-        _identity_banner(session_member_id),
         _month_nav(year, month, member_id),
-        _filter_row(year, month, member_id, session_member_id),
+        _filter_row(year, month, member_id),
         _calendar_grid(weeks, month, events_by_date, today, year, member_id),
         _event_dialog(),
     )
@@ -210,8 +179,6 @@ def calendar_page(sess, year: int = None, month: int = None, member_id: str = No
 @router("/calendar/day/{event_date}", methods=["get"])
 def calendar_day_fragment(sess, event_date: str, year: int = None, month: int = None, member_id: str = None):
     session_member_id = sess.get("member_id")
-    if session_member_id is None:
-        return fast.Redirect("/calendar/switch-user")
     day = _parse_date(event_date)
     if day is None:
         return fast.Response("Invalid date.", status_code=422)
@@ -250,7 +217,7 @@ def add_event_route(
 ):
     member_id = sess.get("member_id")
     if member_id is None:
-        return fast.Redirect("/calendar/switch-user")
+        return fast.Response("Pick a family member from the filter before adding events.", status_code=422)
     title = title.strip()
     start_date = start_date.strip()
     end_date = end_date.strip()
