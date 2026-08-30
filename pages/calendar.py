@@ -1,5 +1,6 @@
 import calendar as cal
 from datetime import date, timedelta
+from urllib.parse import urlencode
 
 from fasthtml import common as fast
 
@@ -10,6 +11,31 @@ import db
 router = fast.APIRouter()
 
 WEEKDAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
+
+
+def _calendar_url(year, month, member_id=None, base="/calendar"):
+    params = {"year": year, "month": month}
+    if member_id:
+        params["member_id"] = member_id
+    return f"{base}?{urlencode(params)}"
+
+
+def _parse_date(value):
+    try:
+        return date.fromisoformat(value)
+    except ValueError:
+        return None
+
+
+def _parse_int_or(value, default):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _is_checkbox_checked(value):
+    return value in ("1", "true", "on")
 
 
 def _month_grid(year, month):
@@ -42,12 +68,11 @@ def _day_square(day_date, events_for_day, in_current_month, is_today, year, mont
         classes.append("today")
     if any(event["is_critical"] for event in events_for_day):
         classes.append("critical-day")
-    member_query = f"&member_id={member_id}" if member_id else ""
     return fast.Div(
         fast.Div(str(day_date.day), cls="day-number"),
         *[_event_bar(event) for event in events_for_day],
         cls=" ".join(classes),
-        hx_get=f"/calendar/day/{day_date.isoformat()}?year={year}&month={month}{member_query}",
+        hx_get=_calendar_url(year, month, member_id, base=f"/calendar/day/{day_date.isoformat()}"),
         hx_target="#event-dialog-body",
         hx_swap="innerHTML",
         **{"hx-on::after-request": "document.getElementById('event-dialog').showModal()"},
@@ -75,13 +100,12 @@ def _calendar_grid(weeks, month, events_by_date, today, year, member_id):
 def _month_nav(year, month, member_id):
     prev_year, prev_month = (year - 1, 12) if month == 1 else (year, month - 1)
     next_year, next_month = (year + 1, 1) if month == 12 else (year, month + 1)
-    member_query = f"&member_id={member_id}" if member_id else ""
     today = date.today()
     return fast.Div(
-        fast.A("< Prev", href=f"/calendar?year={prev_year}&month={prev_month}{member_query}"),
+        fast.A("< Prev", href=_calendar_url(prev_year, prev_month, member_id)),
         fast.Span(f"{cal.month_name[month]} {year}", cls="month-label"),
-        fast.A("Next >", href=f"/calendar?year={next_year}&month={next_month}{member_query}"),
-        fast.A("Today", href=f"/calendar?year={today.year}&month={today.month}{member_query}"),
+        fast.A("Next >", href=_calendar_url(next_year, next_month, member_id)),
+        fast.A("Today", href=_calendar_url(today.year, today.month, member_id)),
         cls="month-nav",
     )
 
@@ -188,7 +212,9 @@ def calendar_day_fragment(sess, event_date: str, year: int = None, month: int = 
     session_member_id = sess.get("member_id")
     if session_member_id is None:
         return fast.Redirect("/calendar/switch-user")
-    day = date.fromisoformat(event_date)
+    day = _parse_date(event_date)
+    if day is None:
+        return fast.Response("Invalid date.", status_code=422)
     year = year or day.year
     month = month or day.month
     events = db.list_events_in_range(event_date, event_date, owner_id=member_id or None)
@@ -230,8 +256,15 @@ def add_event_route(
     end_date = end_date.strip()
     if not title or not start_date:
         return fast.Response("Title and start date are required.", status_code=422)
-    if end_date and end_date < start_date:
-        return fast.Response("End date cannot be before start date.", status_code=422)
+    start_date_parsed = _parse_date(start_date)
+    if start_date_parsed is None:
+        return fast.Response("Invalid start date.", status_code=422)
+    if end_date:
+        end_date_parsed = _parse_date(end_date)
+        if end_date_parsed is None:
+            return fast.Response("Invalid end date.", status_code=422)
+        if end_date < start_date:
+            return fast.Response("End date cannot be before start date.", status_code=422)
     db.add_event(
         owner_id=member_id,
         title=title,
@@ -240,13 +273,11 @@ def add_event_route(
         start_time=start_time.strip() or None,
         end_time=end_time.strip() or None,
         notes=notes.strip() or None,
-        is_critical=bool(is_critical),
+        is_critical=_is_checkbox_checked(is_critical),
     )
-    start_date_parsed = date.fromisoformat(start_date)
-    year = redirect_year or start_date_parsed.year
-    month = redirect_month or start_date_parsed.month
-    member_query = f"&member_id={redirect_member_id}" if redirect_member_id else ""
-    return fast.Redirect(f"/calendar?year={year}&month={month}{member_query}")
+    year = _parse_int_or(redirect_year, start_date_parsed.year)
+    month = _parse_int_or(redirect_month, start_date_parsed.month)
+    return fast.Redirect(_calendar_url(year, month, redirect_member_id))
 
 
 @router("/calendar/{event_id}/delete", methods=["post"])
@@ -261,7 +292,6 @@ def delete_event_route(
         return fast.Response("You can only delete your own events.", status_code=403)
     db.delete_event(event_id)
     today = date.today()
-    year = redirect_year or today.year
-    month = redirect_month or today.month
-    member_query = f"&member_id={redirect_member_id}" if redirect_member_id else ""
-    return fast.Redirect(f"/calendar?year={year}&month={month}{member_query}")
+    year = _parse_int_or(redirect_year, today.year)
+    month = _parse_int_or(redirect_month, today.month)
+    return fast.Redirect(_calendar_url(year, month, redirect_member_id))

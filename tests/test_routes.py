@@ -1,3 +1,5 @@
+from datetime import date
+
 import db
 from family import FAMILY_MEMBERS
 
@@ -231,6 +233,55 @@ def test_add_event_rejects_end_date_before_start_date(client):
         data={"title": "Bad Range", "start_date": f"{CAL_YEAR}-{CAL_MONTH:02d}-05", "end_date": f"{CAL_YEAR}-{CAL_MONTH:02d}-01"},
     )
     assert response.status_code == 422
+
+
+def test_add_event_rejects_malformed_start_date(client):
+    client.post("/calendar/switch-user", data={"member_id": FAMILY_MEMBERS[0]["id"]})
+    response = client.post("/calendar", data={"title": "Bad Date", "start_date": "not-a-date"})
+    assert response.status_code == 422
+
+
+def test_add_event_rejects_malformed_end_date(client):
+    client.post("/calendar/switch-user", data={"member_id": FAMILY_MEMBERS[0]["id"]})
+    response = client.post(
+        "/calendar",
+        data={"title": "Bad End Date", "start_date": f"{CAL_YEAR}-{CAL_MONTH:02d}-01", "end_date": "not-a-date"},
+    )
+    assert response.status_code == 422
+
+
+def test_day_fragment_rejects_malformed_date(client):
+    client.post("/calendar/switch-user", data={"member_id": FAMILY_MEMBERS[0]["id"]})
+    response = client.get("/calendar/day/not-a-date")
+    assert response.status_code == 422
+
+
+def test_add_event_falls_back_to_start_date_year_when_redirect_year_is_garbage(client):
+    client.post("/calendar/switch-user", data={"member_id": FAMILY_MEMBERS[0]["id"]})
+    response = client.post(
+        "/calendar",
+        data={
+            "title": "Trip",
+            "start_date": f"{CAL_YEAR}-{CAL_MONTH:02d}-01",
+            "redirect_year": "garbage",
+            "redirect_month": "garbage",
+        },
+        follow_redirects=False,
+    )
+    assert response.headers["location"] == f"/calendar?year={CAL_YEAR}&month={CAL_MONTH}"
+
+
+def test_delete_event_falls_back_to_today_when_redirect_year_is_garbage(client):
+    client.post("/calendar/switch-user", data={"member_id": FAMILY_MEMBERS[0]["id"]})
+    client.post("/calendar", data={"title": "Owned", "start_date": f"{CAL_YEAR}-{CAL_MONTH:02d}-01"})
+    event_id = db.list_events()[0]["id"]
+    today = date.today()
+    response = client.post(
+        f"/calendar/{event_id}/delete",
+        data={"redirect_year": "garbage", "redirect_month": "garbage"},
+        follow_redirects=False,
+    )
+    assert response.headers["location"] == f"/calendar?year={today.year}&month={today.month}"
 
 
 def test_add_event_redirects_to_requested_month_and_member_filter(client):

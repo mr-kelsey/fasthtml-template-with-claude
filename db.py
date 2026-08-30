@@ -3,27 +3,30 @@ from pathlib import Path
 from dotenv import dotenv_values
 from sqlalchemy import create_engine, text
 
-SCHEMA_SQL = """
-CREATE TABLE IF NOT EXISTS notes (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    title TEXT NOT NULL,
-    body TEXT NOT NULL,
-    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE TABLE IF NOT EXISTS calendar_events (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    owner_id TEXT NOT NULL,
-    title TEXT NOT NULL,
-    start_date TEXT NOT NULL,
-    end_date TEXT NOT NULL,
-    start_time TEXT,
-    end_time TEXT,
-    notes TEXT,
-    is_critical INTEGER NOT NULL DEFAULT 0,
-    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-"""
+SCHEMA_STATEMENTS = [
+    """
+    CREATE TABLE IF NOT EXISTS notes (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        title TEXT NOT NULL,
+        body TEXT NOT NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS calendar_events (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        owner_id TEXT NOT NULL,
+        title TEXT NOT NULL,
+        start_date TEXT NOT NULL,
+        end_date TEXT NOT NULL,
+        start_time TEXT,
+        end_time TEXT,
+        notes TEXT,
+        is_critical INTEGER NOT NULL DEFAULT 0,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
+    """,
+]
 
 _EVENT_COLUMNS = (
     "id, owner_id, title, start_date, end_date, start_time, end_time, notes, is_critical, created_at"
@@ -36,15 +39,19 @@ class Database:
     def __init__(self, env_file=".env"):
         env = dotenv_values(env_file)
         self.DB_PATH = env.get("DB_PATH", "data/app.db")
-        Path(self.DB_PATH).parent.mkdir(parents=True, exist_ok=True)
-        self.engine = create_engine(f"sqlite:///{self.DB_PATH}", connect_args={"check_same_thread": False})
+        self._engine = None
+
+    @property
+    def engine(self):
+        if self._engine is None:
+            Path(self.DB_PATH).parent.mkdir(parents=True, exist_ok=True)
+            self._engine = create_engine(f"sqlite:///{self.DB_PATH}", connect_args={"check_same_thread": False})
+        return self._engine
 
     def init_db(self):
         with self.engine.begin() as db_connection:
-            for statement in SCHEMA_SQL.strip().split(";"):
-                statement = statement.strip()
-                if statement:
-                    db_connection.execute(text(statement))
+            for statement in SCHEMA_STATEMENTS:
+                db_connection.execute(text(statement))
 
     def list_notes(self):
         with self.engine.connect() as db_connection:

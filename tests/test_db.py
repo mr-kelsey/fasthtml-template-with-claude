@@ -79,6 +79,36 @@ def test_list_events_for_owner_excludes_other_members_events():
     assert [e["title"] for e in events] == ["Mine"]
 
 
+def test_list_events_in_range_excludes_event_fully_before_range():
+    db.add_event("member1", "Before", "2026-09-01", "2026-09-02", None, None, None, False)
+    events = db.list_events_in_range("2026-09-10", "2026-09-20")
+    assert events == []
+
+
+def test_list_events_in_range_excludes_event_fully_after_range():
+    db.add_event("member1", "After", "2026-09-25", "2026-09-26", None, None, None, False)
+    events = db.list_events_in_range("2026-09-10", "2026-09-20")
+    assert events == []
+
+
+def test_list_events_in_range_includes_event_spanning_entire_range():
+    db.add_event("member1", "Spanning", "2026-09-01", "2026-09-30", None, None, None, False)
+    events = db.list_events_in_range("2026-09-10", "2026-09-20")
+    assert [e["title"] for e in events] == ["Spanning"]
+
+
+def test_list_events_in_range_includes_event_touching_start_boundary():
+    db.add_event("member1", "TouchesStart", "2026-09-05", "2026-09-10", None, None, None, False)
+    events = db.list_events_in_range("2026-09-10", "2026-09-20")
+    assert [e["title"] for e in events] == ["TouchesStart"]
+
+
+def test_list_events_in_range_includes_event_touching_end_boundary():
+    db.add_event("member1", "TouchesEnd", "2026-09-20", "2026-09-25", None, None, None, False)
+    events = db.list_events_in_range("2026-09-10", "2026-09-20")
+    assert [e["title"] for e in events] == ["TouchesEnd"]
+
+
 def test_add_event_persists_is_critical_flag():
     db.add_event("member1", "Important", "2026-09-01", None, None, None, None, True)
     event = db.list_events()[0]
