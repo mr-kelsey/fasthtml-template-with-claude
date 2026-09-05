@@ -336,11 +336,17 @@ def test_delete_event_by_owner_removes_it(client):
     assert db.list_events() == []
 
 
-def test_day_fragment_add_form_is_hidden_by_default(client):
+def test_day_fragment_add_form_is_hidden_when_day_has_events(client):
+    _pick_member(client, FAMILY_MEMBERS[0]["id"])
+    client.post("/calendar", data={"title": "Dentist", "start_date": f"{CAL_YEAR}-{CAL_MONTH:02d}-05"})
+    response = client.get(f"/calendar/day/{CAL_YEAR}-{CAL_MONTH:02d}-05")
+    assert '<form enctype="multipart/form-data" method="post" action="/calendar" hidden' in response.text
+
+
+def test_day_fragment_add_form_is_visible_when_day_has_no_events(client):
     _pick_member(client, FAMILY_MEMBERS[0]["id"])
     response = client.get(f"/calendar/day/{CAL_YEAR}-{CAL_MONTH:02d}-05")
-    assert 'id="add-event-form"' in response.text
-    assert "hidden" in response.text
+    assert '<form enctype="multipart/form-data" method="post" action="/calendar" id="add-event-form"' in response.text
 
 
 def test_day_fragment_shows_add_event_button(client):

@@ -152,7 +152,9 @@ def _show_form_js(form_id):
     )
 
 
-def _event_form(form_id, action, submit_label, event=None, default_date="", year="", month="", member_id=""):
+def _event_form(
+    form_id, action, submit_label, event=None, default_date="", year="", month="", member_id="", hidden=True
+):
     return fast.Form(
         fast.Input(name="title", placeholder="Title", value=event["title"] if event else "", required=True),
         fast.Input(
@@ -182,7 +184,7 @@ def _event_form(form_id, action, submit_label, event=None, default_date="", year
         action=action,
         id=form_id,
         cls="event-form",
-        hidden=True,
+        hidden=hidden,
     )
 
 
@@ -235,7 +237,7 @@ def calendar_day_fragment(sess, event_date: str, year: int = None, month: int = 
         actions = []
         if event["owner_id"] == session_member_id:
             edit_form_id = f"edit-event-form-{event['id']}"
-            actions.append(fast.Button("Edit", type="button", onclick=_show_form_js(edit_form_id)))
+            actions.append(fast.Button("Edit", type="submit", onclick=_show_form_js(edit_form_id)))
             actions.append(_delete_event_form(event["id"], year, month, member_id))
             edit_forms.append(
                 _event_form(
@@ -263,6 +265,7 @@ def calendar_day_fragment(sess, event_date: str, year: int = None, month: int = 
                 year=year,
                 month=month,
                 member_id=member_id,
+                hidden=bool(events),
             ),
         ),
         fast.Button("Close", type="button", onclick="document.getElementById('event-dialog').close()"),
