@@ -127,6 +127,36 @@ class Database:
                 },
             )
 
+    def update_event(
+        self,
+        event_id: int,
+        title: str,
+        start_date: str,
+        end_date: str,
+        start_time: str,
+        end_time: str,
+        notes: str,
+        is_critical: bool,
+    ):
+        with self.engine.begin() as db_connection:
+            db_connection.execute(
+                text(
+                    "UPDATE calendar_events SET title = :title, start_date = :start_date, "
+                    "end_date = :end_date, start_time = :start_time, end_time = :end_time, "
+                    "notes = :notes, is_critical = :is_critical WHERE id = :id"
+                ),
+                {
+                    "id": event_id,
+                    "title": title,
+                    "start_date": start_date,
+                    "end_date": end_date or start_date,
+                    "start_time": start_time or None,
+                    "end_time": end_time or None,
+                    "notes": notes or None,
+                    "is_critical": int(bool(is_critical)),
+                },
+            )
+
     def delete_event(self, event_id: int):
         with self.engine.begin() as db_connection:
             db_connection.execute(text("DELETE FROM calendar_events WHERE id = :id"), {"id": event_id})

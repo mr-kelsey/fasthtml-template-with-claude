@@ -38,6 +38,25 @@ def _is_checkbox_checked(value):
     return value in ("1", "true", "on")
 
 
+def _validate_event_dates(title, start_date, end_date):
+    "Returns (title, start_date, end_date, start_date_parsed) or an error fast.Response."
+    title = title.strip()
+    start_date = start_date.strip()
+    end_date = end_date.strip()
+    if not title or not start_date:
+        return fast.Response("Title and start date are required.", status_code=422)
+    start_date_parsed = _parse_date(start_date)
+    if start_date_parsed is None:
+        return fast.Response("Invalid start date.", status_code=422)
+    if end_date:
+        end_date_parsed = _parse_date(end_date)
+        if end_date_parsed is None:
+            return fast.Response("Invalid end date.", status_code=422)
+        if end_date_parsed < start_date_parsed:
+            return fast.Response("End date cannot be before start date.", status_code=422)
+    return title, start_date, end_date, start_date_parsed
+
+
 def _month_grid(year, month):
     return cal.Calendar(firstweekday=6).monthdatescalendar(year, month)
 
@@ -126,21 +145,44 @@ def _event_dialog():
     return fast.Dialog(fast.Div(id="event-dialog-body"), id="event-dialog")
 
 
-def _add_event_form(default_date="", year="", month="", member_id=""):
+def _show_form_js(form_id):
+    return (
+        "document.querySelectorAll('#event-dialog-body .event-form').forEach(f => f.hidden = true); "
+        f"document.getElementById('{form_id}').hidden = false;"
+    )
+
+
+def _event_form(form_id, action, submit_label, event=None, default_date="", year="", month="", member_id=""):
     return fast.Form(
-        fast.Input(name="title", placeholder="Title", required=True),
-        fast.Input(name="start_date", type="date", value=default_date, required=True),
-        fast.Input(name="end_date", type="date"),
-        fast.Input(name="start_time", type="time"),
-        fast.Input(name="end_time", type="time"),
-        fast.Textarea(name="notes", placeholder="Notes (optional)"),
-        fast.Label(fast.Input(name="is_critical", type="checkbox", value="1"), " Can't miss"),
+        fast.Input(name="title", placeholder="Title", value=event["title"] if event else "", required=True),
+        fast.Input(
+            name="start_date",
+            type="date",
+            value=event["start_date"] if event else default_date,
+            required=True,
+        ),
+        fast.Input(name="end_date", type="date", value=event["end_date"] if event else ""),
+        fast.Input(name="start_time", type="time", value=(event["start_time"] or "") if event else ""),
+        fast.Input(name="end_time", type="time", value=(event["end_time"] or "") if event else ""),
+        fast.Textarea(event["notes"] or "" if event else "", name="notes", placeholder="Notes (optional)"),
+        fast.Label(
+            fast.Input(
+                name="is_critical",
+                type="checkbox",
+                value="1",
+                checked=bool(event["is_critical"]) if event else False,
+            ),
+            " Can't miss",
+        ),
         fast.Input(type="hidden", name="redirect_year", value=str(year)),
         fast.Input(type="hidden", name="redirect_month", value=str(month)),
         fast.Input(type="hidden", name="redirect_member_id", value=member_id or ""),
-        fast.Button("Add Event", type="submit"),
+        fast.Button(submit_label, type="submit"),
         method="post",
-        action="/calendar",
+        action=action,
+        id=form_id,
+        cls="event-form",
+        hidden=True,
     )
 
 
@@ -186,17 +228,43 @@ def calendar_day_fragment(sess, event_date: str, year: int = None, month: int = 
     month = month or day.month
     events = db.list_events_in_range(event_date, event_date, owner_id=member_id or None)
     rows = []
+    edit_forms = []
     for event in events:
         member = get_member(event["owner_id"])
         owner_name = member["name"] if member else event["owner_id"]
-        delete_form = ""
+        actions = []
         if event["owner_id"] == session_member_id:
-            delete_form = _delete_event_form(event["id"], year, month, member_id)
-        rows.append(fast.Li(f"{event['title']} — {owner_name}", delete_form))
+            edit_form_id = f"edit-event-form-{event['id']}"
+            actions.append(fast.Button("Edit", type="button", onclick=_show_form_js(edit_form_id)))
+            actions.append(_delete_event_form(event["id"], year, month, member_id))
+            edit_forms.append(
+                _event_form(
+                    form_id=edit_form_id,
+                    action=f"/calendar/{event['id']}/edit",
+                    submit_label="Save Changes",
+                    event=event,
+                    year=year,
+                    month=month,
+                    member_id=member_id,
+                )
+            )
+        rows.append(fast.Li(f"{event['title']} — {owner_name}", *actions))
     return (
         fast.H3(day.isoformat()),
         fast.Ul(*rows) if rows else fast.P("No events yet."),
-        _add_event_form(default_date=event_date, year=year, month=month, member_id=member_id),
+        *edit_forms,
+        fast.Div(
+            fast.Button("Add Event", type="button", onclick=_show_form_js("add-event-form")),
+            _event_form(
+                form_id="add-event-form",
+                action="/calendar",
+                submit_label="Add Event",
+                default_date=event_date,
+                year=year,
+                month=month,
+                member_id=member_id,
+            ),
+        ),
         fast.Button("Close", type="button", onclick="document.getElementById('event-dialog').close()"),
     )
 
@@ -218,20 +286,10 @@ def add_event_route(
     member_id = sess.get("member_id")
     if member_id is None:
         return fast.Response("Pick a family member from the filter before adding events.", status_code=422)
-    title = title.strip()
-    start_date = start_date.strip()
-    end_date = end_date.strip()
-    if not title or not start_date:
-        return fast.Response("Title and start date are required.", status_code=422)
-    start_date_parsed = _parse_date(start_date)
-    if start_date_parsed is None:
-        return fast.Response("Invalid start date.", status_code=422)
-    if end_date:
-        end_date_parsed = _parse_date(end_date)
-        if end_date_parsed is None:
-            return fast.Response("Invalid end date.", status_code=422)
-        if end_date_parsed < start_date_parsed:
-            return fast.Response("End date cannot be before start date.", status_code=422)
+    validated = _validate_event_dates(title, start_date, end_date)
+    if isinstance(validated, fast.Response):
+        return validated
+    title, start_date, end_date, start_date_parsed = validated
     db.add_event(
         owner_id=member_id,
         title=title,
@@ -261,4 +319,44 @@ def delete_event_route(
     today = date.today()
     year = _parse_int_or(redirect_year, today.year)
     month = _parse_int_or(redirect_month, today.month)
+    return fast.Redirect(_calendar_url(year, month, redirect_member_id))
+
+
+@router("/calendar/{event_id}/edit", methods=["post"])
+def edit_event_route(
+    sess,
+    event_id: int,
+    title: str,
+    start_date: str,
+    end_date: str = "",
+    start_time: str = "",
+    end_time: str = "",
+    notes: str = "",
+    is_critical: str = "",
+    redirect_year: str = "",
+    redirect_month: str = "",
+    redirect_member_id: str = "",
+):
+    member_id = sess.get("member_id")
+    event = db.get_event(event_id)
+    if event is None:
+        return fast.Redirect("/calendar")
+    if event["owner_id"] != member_id:
+        return fast.Response("You can only edit your own events.", status_code=403)
+    validated = _validate_event_dates(title, start_date, end_date)
+    if isinstance(validated, fast.Response):
+        return validated
+    title, start_date, end_date, start_date_parsed = validated
+    db.update_event(
+        event_id,
+        title=title,
+        start_date=start_date,
+        end_date=end_date or None,
+        start_time=start_time.strip() or None,
+        end_time=end_time.strip() or None,
+        notes=notes.strip() or None,
+        is_critical=_is_checkbox_checked(is_critical),
+    )
+    year = _parse_int_or(redirect_year, start_date_parsed.year)
+    month = _parse_int_or(redirect_month, start_date_parsed.month)
     return fast.Redirect(_calendar_url(year, month, redirect_member_id))

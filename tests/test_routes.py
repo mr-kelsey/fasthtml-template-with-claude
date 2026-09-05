@@ -334,3 +334,98 @@ def test_delete_event_by_owner_removes_it(client):
     event_id = db.list_events()[0]["id"]
     client.post(f"/calendar/{event_id}/delete")
     assert db.list_events() == []
+
+
+def test_day_fragment_add_form_is_hidden_by_default(client):
+    _pick_member(client, FAMILY_MEMBERS[0]["id"])
+    response = client.get(f"/calendar/day/{CAL_YEAR}-{CAL_MONTH:02d}-05")
+    assert 'id="add-event-form"' in response.text
+    assert "hidden" in response.text
+
+
+def test_day_fragment_shows_add_event_button(client):
+    _pick_member(client, FAMILY_MEMBERS[0]["id"])
+    response = client.get(f"/calendar/day/{CAL_YEAR}-{CAL_MONTH:02d}-05")
+    assert ">Add Event<" in response.text
+
+
+def test_day_fragment_shows_edit_button_for_owned_event(client):
+    _pick_member(client, FAMILY_MEMBERS[0]["id"])
+    client.post("/calendar", data={"title": "Dentist", "start_date": f"{CAL_YEAR}-{CAL_MONTH:02d}-05"})
+    response = client.get(f"/calendar/day/{CAL_YEAR}-{CAL_MONTH:02d}-05")
+    assert ">Edit<" in response.text
+
+
+def test_day_fragment_hides_edit_button_for_others_event(client):
+    _pick_member(client, FAMILY_MEMBERS[0]["id"])
+    client.post("/calendar", data={"title": "Theirs", "start_date": f"{CAL_YEAR}-{CAL_MONTH:02d}-05"})
+    _pick_member(client, FAMILY_MEMBERS[1]["id"])
+    response = client.get(f"/calendar/day/{CAL_YEAR}-{CAL_MONTH:02d}-05")
+    assert ">Edit<" not in response.text
+
+
+def test_edit_event_by_owner_updates_title(client):
+    _pick_member(client, FAMILY_MEMBERS[0]["id"])
+    client.post("/calendar", data={"title": "Original", "start_date": f"{CAL_YEAR}-{CAL_MONTH:02d}-01"})
+    event_id = db.list_events()[0]["id"]
+    client.post(
+        f"/calendar/{event_id}/edit",
+        data={"title": "Updated", "start_date": f"{CAL_YEAR}-{CAL_MONTH:02d}-01"},
+    )
+    assert db.get_event(event_id)["title"] == "Updated"
+
+
+def test_edit_event_by_non_owner_is_forbidden(client):
+    _pick_member(client, FAMILY_MEMBERS[0]["id"])
+    client.post("/calendar", data={"title": "Owned", "start_date": f"{CAL_YEAR}-{CAL_MONTH:02d}-01"})
+    event_id = db.list_events()[0]["id"]
+    _pick_member(client, FAMILY_MEMBERS[1]["id"])
+    response = client.post(
+        f"/calendar/{event_id}/edit",
+        data={"title": "Hijacked", "start_date": f"{CAL_YEAR}-{CAL_MONTH:02d}-01"},
+    )
+    assert response.status_code == 403
+
+
+def test_edit_event_rejects_blank_title(client):
+    _pick_member(client, FAMILY_MEMBERS[0]["id"])
+    client.post("/calendar", data={"title": "Owned", "start_date": f"{CAL_YEAR}-{CAL_MONTH:02d}-01"})
+    event_id = db.list_events()[0]["id"]
+    response = client.post(
+        f"/calendar/{event_id}/edit",
+        data={"title": "", "start_date": f"{CAL_YEAR}-{CAL_MONTH:02d}-01"},
+    )
+    assert response.status_code == 422
+
+
+def test_edit_event_rejects_end_date_before_start_date(client):
+    _pick_member(client, FAMILY_MEMBERS[0]["id"])
+    client.post("/calendar", data={"title": "Owned", "start_date": f"{CAL_YEAR}-{CAL_MONTH:02d}-05"})
+    event_id = db.list_events()[0]["id"]
+    response = client.post(
+        f"/calendar/{event_id}/edit",
+        data={
+            "title": "Owned",
+            "start_date": f"{CAL_YEAR}-{CAL_MONTH:02d}-05",
+            "end_date": f"{CAL_YEAR}-{CAL_MONTH:02d}-01",
+        },
+    )
+    assert response.status_code == 422
+
+
+def test_edit_event_redirects_to_requested_month_and_member_filter(client):
+    _pick_member(client, FAMILY_MEMBERS[0]["id"])
+    client.post("/calendar", data={"title": "Owned", "start_date": f"{CAL_YEAR}-{CAL_MONTH:02d}-01"})
+    event_id = db.list_events()[0]["id"]
+    response = client.post(
+        f"/calendar/{event_id}/edit",
+        data={
+            "title": "Owned",
+            "start_date": f"{CAL_YEAR}-{CAL_MONTH:02d}-01",
+            "redirect_year": "2026",
+            "redirect_month": "10",
+            "redirect_member_id": FAMILY_MEMBERS[0]["id"],
+        },
+        follow_redirects=False,
+    )
+    assert response.headers["location"] == f"/calendar?year=2026&month=10&member_id={FAMILY_MEMBERS[0]['id']}"

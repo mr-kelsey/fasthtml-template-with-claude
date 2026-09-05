@@ -129,3 +129,17 @@ def test_get_event_returns_matching_row():
 
 def test_get_event_returns_none_when_not_found():
     assert db.get_event(999999) is None
+
+
+def test_update_event_changes_title():
+    db.add_event("member1", "Original", "2026-09-01", None, None, None, None, False)
+    event_id = db.list_events()[0]["id"]
+    db.update_event(event_id, "Updated", "2026-09-01", None, None, None, None, False)
+    assert db.get_event(event_id)["title"] == "Updated"
+
+
+def test_update_event_defaults_end_date_to_start_date_when_omitted():
+    db.add_event("member1", "Trip", "2026-09-01", "2026-09-05", None, None, None, False)
+    event_id = db.list_events()[0]["id"]
+    db.update_event(event_id, "Trip", "2026-09-02", None, None, None, None, False)
+    assert db.get_event(event_id)["end_date"] == "2026-09-02"
