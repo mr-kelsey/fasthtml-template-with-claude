@@ -7,12 +7,14 @@ running on :5001 (see SKILL.md):
     python .claude/skills/run-fasthtml-template-with-claude/driver.py
 
 Adds one throwaway event ("Driver Smoke Test") to today's date under
-Person 1, verifies it renders as a colored event bar and a critical-day
-border, screenshots each step, then deletes the event again via
-db.delete_event so the real dev database (data/app.db) is left
-untouched. Requires `family.json` to exist (copy family.example.json
-if you don't have a real one) and `pip install playwright && playwright
-install chromium` (one-time; see SKILL.md Prerequisites).
+Person 1 (selected via the calendar's filter row, which doubles as the
+member picker), verifies it renders as a colored event bar and a
+critical-day border, screenshots each step, then deletes the event
+again via db.delete_event so the real dev database (data/app.db) is
+left untouched. Requires `family.json` to exist (copy
+family.example.json if you don't have a real one) and `pip install
+playwright && playwright install chromium` (one-time; see SKILL.md
+Prerequisites).
 """
 import argparse
 import sys
@@ -44,8 +46,8 @@ def main():
         page.on("pageerror", lambda exc: console_errors.append(str(exc)))
 
         page.goto(f"{args.base_url}/calendar")
-        if page.get_by_text("Who's using the calendar?").is_visible():
-            page.click("button:has-text('Person 1')")
+        page.wait_for_selector(".calendar-grid")
+        page.click(".filter-row a:has-text('Person 1')")
         page.wait_for_selector(".calendar-grid")
         page.screenshot(path=f"{args.screenshot_dir}/01-grid.png")
 
