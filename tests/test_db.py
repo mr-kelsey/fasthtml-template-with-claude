@@ -72,13 +72,6 @@ def test_events_ordered_by_start_date():
     assert [e["title"] for e in events] == ["Earlier", "Later"]
 
 
-def test_list_events_for_owner_excludes_other_members_events():
-    db.add_event("member1", "Mine", "2026-09-01", None, None, None, None, False)
-    db.add_event("member2", "Theirs", "2026-09-01", None, None, None, None, False)
-    events = db.list_events_for_owner("member1")
-    assert [e["title"] for e in events] == ["Mine"]
-
-
 def test_list_events_in_range_excludes_event_fully_before_range():
     db.add_event("member1", "Before", "2026-09-01", "2026-09-02", None, None, None, False)
     events = db.list_events_in_range("2026-09-10", "2026-09-20")

@@ -230,7 +230,7 @@ def add_event_route(
         end_date_parsed = _parse_date(end_date)
         if end_date_parsed is None:
             return fast.Response("Invalid end date.", status_code=422)
-        if end_date < start_date:
+        if end_date_parsed < start_date_parsed:
             return fast.Response("End date cannot be before start date.", status_code=422)
     db.add_event(
         owner_id=member_id,

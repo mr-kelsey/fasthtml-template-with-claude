@@ -228,6 +228,17 @@ def test_day_fragment_route_lists_existing_events_for_that_day(client):
     assert "Dentist" in response.text
 
 
+def test_day_fragment_member_filter_hides_other_members_event(client):
+    _pick_member(client, FAMILY_MEMBERS[0]["id"])
+    client.post("/calendar", data={"title": "Mine", "start_date": f"{CAL_YEAR}-{CAL_MONTH:02d}-05"})
+    _pick_member(client, FAMILY_MEMBERS[1]["id"])
+    client.post("/calendar", data={"title": "Theirs", "start_date": f"{CAL_YEAR}-{CAL_MONTH:02d}-05"})
+    response = client.get(
+        f"/calendar/day/{CAL_YEAR}-{CAL_MONTH:02d}-05?member_id={FAMILY_MEMBERS[1]['id']}"
+    )
+    assert "Mine" not in response.text
+
+
 def test_add_event_rejects_blank_title(client):
     _pick_member(client, FAMILY_MEMBERS[0]["id"])
     response = client.post("/calendar", data={"title": "", "start_date": f"{CAL_YEAR}-{CAL_MONTH:02d}-01"})
