@@ -42,7 +42,7 @@ timeout 30 bash -c 'until curl -sf http://localhost:5001 >/dev/null; do sleep 1;
 python .claude/skills/run-fasthtml-template-with-claude/driver.py
 ```
 
-The driver: opens `/calendar`, clicks "Person 1" in the filter row (which doubles as the member picker — this sets `member_id` in the session), screenshots the month grid, clicks today's day square, screenshots the opened `<dialog>` modal, fills and submits the add-event form with a critical event titled "Driver Smoke Test", screenshots the grid again, prints the count of `.event-bar` and `.day-square.critical-day` elements plus any browser console errors, then **deletes the event it just created** via `db.delete_event` so the real dev database (`data/app.db`) is left exactly as it found it.
+The driver: opens `/calendar`, clicks the first configured family member's name (from `family.FAMILY_MEMBERS`) in the filter row (which doubles as the member picker — this sets `member_id` in the session), screenshots the month grid, clicks today's day square, screenshots the opened `<dialog>` modal, fills and submits the add-event form with a critical event titled "Driver Smoke Test", screenshots the grid again, prints the count of `.event-bar` and `.day-square.critical-day` elements plus any browser console errors, then **deletes the event it just created** via `db.delete_event` so the real dev database (`data/app.db`) is left exactly as it found it.
 
 Screenshots land in `.claude/skills/run-fasthtml-template-with-claude/screenshots/` (`01-grid.png`, `02-dialog.png`, `03-after-add.png`).
 
@@ -80,10 +80,10 @@ All tests should pass. Tests use `.env.test` (a separate DB truncated per-test),
 
 - **`db.py` resolves `.env`/`family.json` relative to the current working directory**, not to the script's location — always run `driver.py` (and `main.py`) from the repo root, or `db.Database()` silently falls back to `data/app.db` under whatever directory you happened to be in.
 - **The driver mutates the real dev database** (adds then deletes one event by exact title match `"Driver Smoke Test"`). If the driver is killed mid-run (e.g. Ctrl-C between add and cleanup), an orphan event survives — check with `python -c "import db; [print(dict(e)) for e in db.list_events()]"` and remove it manually with `db.delete_event(<id>)`.
-- **A fresh browser context has no session cookie**, so `GET /calendar` renders the grid unfiltered ("Everyone") with no `member_id` in the session — the driver clicks "Person 1" in the filter row before adding an event. Skipping that step causes the add-event POST to fail with 422 ("Pick a family member from the filter before adding events.") since `pages/calendar.py`'s `add_event_route` requires `sess["member_id"]`.
+- **A fresh browser context has no session cookie**, so `GET /calendar` renders the grid unfiltered ("Everyone") with no `member_id` in the session — the driver clicks `family.FAMILY_MEMBERS[0]["name"]` in the filter row before adding an event (it imports `family` directly rather than hardcoding a name, since the real `family.json` normally holds actual family names, not the "Person 1"-style placeholders). Skipping that step causes the add-event POST to fail with 422 ("Pick a family member from the filter before adding events.") since `pages/calendar.py`'s `add_event_route` requires `sess["member_id"]`.
 
 ## Troubleshooting
 
 - **`ModuleNotFoundError: No module named 'playwright'`**: not installed in the active venv. `pip install -r requirements-dev.txt`.
-- **`playwright._impl._errors.TimeoutError: ... waiting for locator(".filter-row a:has-text('Person 1')")`**: `family.json` doesn't exist and the placeholder fallback wasn't loaded, or a custom `family.json` has different member names — check `family.py`'s `FAMILY_MEMBERS` and adjust the driver's click target to match a real name.
+- **`playwright._impl._errors.TimeoutError: ... waiting for locator(".filter-row a:text-is(...)")`**: the filter row doesn't have a link matching `family.FAMILY_MEMBERS[0]["name"]` — check `family.json`'s contents against what the driver resolved.
 - **Add-event POST returns 422 "Pick a family member from the filter before adding events."**: the driver skipped or failed the filter-row click, so `sess["member_id"]` was never set — see Gotchas.

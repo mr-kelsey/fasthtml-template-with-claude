@@ -7,14 +7,14 @@ running on :5001 (see SKILL.md):
     python .claude/skills/run-fasthtml-template-with-claude/driver.py
 
 Adds one throwaway event ("Driver Smoke Test") to today's date under
-Person 1 (selected via the calendar's filter row, which doubles as the
-member picker), verifies it renders as a colored event bar and a
-critical-day border, screenshots each step, then deletes the event
-again via db.delete_event so the real dev database (data/app.db) is
-left untouched. Requires `family.json` to exist (copy
-family.example.json if you don't have a real one) and `pip install
-playwright && playwright install chromium` (one-time; see SKILL.md
-Prerequisites).
+the first configured family member (selected via the calendar's filter
+row, which doubles as the member picker), verifies it renders as a
+colored event bar and a critical-day border, screenshots each step,
+then deletes the event again via db.delete_event so the real dev
+database (data/app.db) is left untouched. Requires `family.json` to
+exist (copy family.example.json if you don't have a real one) and
+`pip install playwright && playwright install chromium` (one-time; see
+SKILL.md Prerequisites).
 """
 import argparse
 import sys
@@ -37,6 +37,9 @@ def main():
     Path(args.screenshot_dir).mkdir(parents=True, exist_ok=True)
 
     import db
+    from family import FAMILY_MEMBERS
+
+    member_name = FAMILY_MEMBERS[0]["name"]
 
     with sync_playwright() as p:
         browser = p.chromium.launch(args=["--no-sandbox"])
@@ -47,7 +50,7 @@ def main():
 
         page.goto(f"{args.base_url}/calendar")
         page.wait_for_selector(".calendar-grid")
-        page.click(".filter-row a:has-text('Person 1')")
+        page.click(f".filter-row a:text-is('{member_name}')")
         page.wait_for_selector(".calendar-grid")
         page.screenshot(path=f"{args.screenshot_dir}/01-grid.png")
 
