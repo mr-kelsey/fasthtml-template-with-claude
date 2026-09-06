@@ -13,61 +13,63 @@ def _optional_value(variety, field):
     return variety[field]
 
 
-def _override_form_fields(variety=None):
-    "Blank means 'inherit the plant's default' -- these are the variety's own raw override columns, not effective values."
+def _agronomic_form_fields(variety=None):
     return (
         fast.Input(
             name="germination_days_min",
             type="number",
-            placeholder="Germination days min (override)",
+            placeholder="Germination days (min)",
             value=_optional_value(variety, "germination_days_min"),
         ),
         fast.Input(
             name="germination_days_max",
             type="number",
-            placeholder="Germination days max (override)",
+            placeholder="Germination days (max)",
             value=_optional_value(variety, "germination_days_max"),
         ),
         fast.Input(
             name="days_to_maturity_min",
             type="number",
-            placeholder="Days to maturity min (override)",
+            placeholder="Days to maturity (min)",
             value=_optional_value(variety, "days_to_maturity_min"),
         ),
         fast.Input(
             name="days_to_maturity_max",
             type="number",
-            placeholder="Days to maturity max (override)",
+            placeholder="Days to maturity (max)",
             value=_optional_value(variety, "days_to_maturity_max"),
         ),
         fast.Input(
-            name="spacing_in",
-            type="number",
-            placeholder="Spacing in (override)",
-            value=_optional_value(variety, "spacing_in"),
+            name="spacing_in", type="number", placeholder="Spacing (in)", value=_optional_value(variety, "spacing_in")
         ),
+        fast.Input(name="sun_needs", placeholder="Sun needs (optional)", value=_optional_value(variety, "sun_needs")),
         fast.Input(
-            name="sun_needs", placeholder="Sun needs (override)", value=_optional_value(variety, "sun_needs")
-        ),
-        fast.Input(
-            name="water_needs", placeholder="Water needs (override)", value=_optional_value(variety, "water_needs")
+            name="water_needs", placeholder="Water needs (optional)", value=_optional_value(variety, "water_needs")
         ),
     )
 
 
-def _variety_form(action, submit_label, plants, variety=None):
-    selected_plant_id = variety["plant_id"] if variety else None
+def _variety_form(action, submit_label, variety=None):
     return fast.Form(
-        fast.Select(
-            *[
-                fast.Option(plant["name"], value=str(plant["id"]), selected=(plant["id"] == selected_plant_id))
-                for plant in plants
-            ],
-            name="plant_id",
+        fast.Input(
+            name="common_name",
+            placeholder="Common name (e.g. Tomato)",
+            value=variety["common_name"] if variety else "",
             required=True,
         ),
-        fast.Input(name="name", placeholder="Variety name", value=variety["name"] if variety else "", required=True),
-        *_override_form_fields(variety),
+        fast.Input(
+            name="name", placeholder="Variety name (e.g. Cherokee Purple)", value=variety["name"] if variety else "",
+            required=True,
+        ),
+        fast.Input(
+            name="plant_family",
+            placeholder="Plant family (e.g. Solanaceae)",
+            value=variety["plant_family"] if variety else "",
+            required=True,
+        ),
+        fast.Input(name="genus", placeholder="Genus (optional)", value=_optional_value(variety, "genus")),
+        fast.Input(name="species", placeholder="Species (optional)", value=_optional_value(variety, "species")),
+        *_agronomic_form_fields(variety),
         fast.Button(submit_label, type="submit"),
         method="post",
         action=action,
@@ -77,7 +79,10 @@ def _variety_form(action, submit_label, plants, variety=None):
 def _variety_row(variety):
     return fast.Tr(
         fast.Td(variety["name"]),
-        fast.Td(variety["plant_name"] or ""),
+        fast.Td(variety["common_name"]),
+        fast.Td(variety["plant_family"]),
+        fast.Td(variety["genus"] or ""),
+        fast.Td(variety["species"] or ""),
         fast.Td(format_day_range(variety["germination_days_min"], variety["germination_days_max"])),
         fast.Td(format_day_range(variety["days_to_maturity_min"], variety["days_to_maturity_max"])),
         fast.Td(variety["spacing_in"] if variety["spacing_in"] is not None else ""),
@@ -96,9 +101,11 @@ def _variety_row(variety):
 
 @router("/seed-varieties", methods=["get"])
 def list_seed_varieties_page():
-    plants = db.list_plants()
     varieties = db.list_seed_varieties()
-    headers = ["Name", "Plant", "Germination (days)", "Maturity (days)", "Spacing (in)", "Sun", "Water", ""]
+    headers = [
+        "Name", "Common Name", "Family", "Genus", "Species",
+        "Germination (days)", "Maturity (days)", "Spacing (in)", "Sun", "Water", "",
+    ]
     rows = (
         [_variety_row(v) for v in varieties]
         if varieties
@@ -108,36 +115,33 @@ def list_seed_varieties_page():
         fast.Thead(fast.Tr(*[fast.Th(h) for h in headers])),
         fast.Tbody(*rows),
     )
-    add_section = (
-        (
-            fast.H2("Add a seed variety"),
-            fast.P("Blank fields inherit the plant's default -- fill one in only when this cultivar differs."),
-            _variety_form(action="/seed-varieties", submit_label="Add Variety", plants=plants),
-        )
-        if plants
-        else (fast.P(fast.A("Add a plant", href="/plants"), " first before adding varieties of it."),)
-    )
     return layout(
         "Seed Varieties",
         fast.H1("Seed Varieties"),
-        *add_section,
+        fast.H2("Add a seed variety"),
+        _variety_form(action="/seed-varieties", submit_label="Add Variety"),
         fast.H2("All varieties"),
         table,
     )
 
 
-def _validate_plant_id(plant_id: str):
-    "Returns the int plant_id if it references an existing plant, or an error fast.Response."
-    ok, parsed_plant_id = (True, int(plant_id)) if plant_id.strip().isdigit() else (False, None)
-    if not ok or db.get_plant(parsed_plant_id) is None:
-        return fast.Response("Choose a valid plant.", status_code=422)
-    return parsed_plant_id
+def _validate_required_fields(common_name, name, plant_family):
+    "Returns (common_name, name, plant_family) or an error fast.Response."
+    common_name = common_name.strip()
+    name = name.strip()
+    plant_family = plant_family.strip()
+    if not common_name or not name or not plant_family:
+        return fast.Response("Common name, variety name, and plant family are required.", status_code=422)
+    return common_name, name, plant_family
 
 
 @router("/seed-varieties", methods=["post"])
 def add_seed_variety_route(
-    plant_id: str,
+    common_name: str,
     name: str,
+    plant_family: str,
+    genus: str = "",
+    species: str = "",
     germination_days_min: str = "",
     germination_days_max: str = "",
     days_to_maturity_min: str = "",
@@ -146,19 +150,24 @@ def add_seed_variety_route(
     sun_needs: str = "",
     water_needs: str = "",
 ):
-    name = name.strip()
-    if not name:
-        return fast.Response("Name is required.", status_code=422)
-    validated_plant_id = _validate_plant_id(plant_id)
-    if isinstance(validated_plant_id, fast.Response):
-        return validated_plant_id
+    validated = _validate_required_fields(common_name, name, plant_family)
+    if isinstance(validated, fast.Response):
+        return validated
+    common_name, name, plant_family = validated
     fields, error = parse_agronomic_fields(
         germination_days_min, germination_days_max, days_to_maturity_min, days_to_maturity_max, spacing_in
     )
     if error:
         return fast.Response(error, status_code=422)
     db.add_seed_variety(
-        validated_plant_id, name, sun_needs=sun_needs.strip() or None, water_needs=water_needs.strip() or None, **fields
+        common_name,
+        name,
+        plant_family,
+        genus=genus.strip() or None,
+        species=species.strip() or None,
+        sun_needs=sun_needs.strip() or None,
+        water_needs=water_needs.strip() or None,
+        **fields,
     )
     return fast.Redirect("/seed-varieties")
 
@@ -171,20 +180,18 @@ def edit_seed_variety_page(variety_id: int):
     return layout(
         "Edit Seed Variety",
         fast.H1("Edit Seed Variety"),
-        _variety_form(
-            action=f"/seed-varieties/{variety_id}/edit",
-            submit_label="Save Changes",
-            plants=db.list_plants(),
-            variety=variety,
-        ),
+        _variety_form(action=f"/seed-varieties/{variety_id}/edit", submit_label="Save Changes", variety=variety),
     )
 
 
 @router("/seed-varieties/{variety_id}/edit", methods=["post"])
 def update_seed_variety_route(
     variety_id: int,
-    plant_id: str,
+    common_name: str,
     name: str,
+    plant_family: str,
+    genus: str = "",
+    species: str = "",
     germination_days_min: str = "",
     germination_days_max: str = "",
     days_to_maturity_min: str = "",
@@ -193,12 +200,10 @@ def update_seed_variety_route(
     sun_needs: str = "",
     water_needs: str = "",
 ):
-    name = name.strip()
-    if not name:
-        return fast.Response("Name is required.", status_code=422)
-    validated_plant_id = _validate_plant_id(plant_id)
-    if isinstance(validated_plant_id, fast.Response):
-        return validated_plant_id
+    validated = _validate_required_fields(common_name, name, plant_family)
+    if isinstance(validated, fast.Response):
+        return validated
+    common_name, name, plant_family = validated
     fields, error = parse_agronomic_fields(
         germination_days_min, germination_days_max, days_to_maturity_min, days_to_maturity_max, spacing_in
     )
@@ -206,8 +211,11 @@ def update_seed_variety_route(
         return fast.Response(error, status_code=422)
     db.update_seed_variety(
         variety_id,
-        validated_plant_id,
+        common_name,
         name,
+        plant_family,
+        genus=genus.strip() or None,
+        species=species.strip() or None,
         sun_needs=sun_needs.strip() or None,
         water_needs=water_needs.strip() or None,
         **fields,

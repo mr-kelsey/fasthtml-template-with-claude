@@ -5,7 +5,6 @@ NAV_LINKS = [
     ("About", "/about"),
     ("Notes", "/notes"),
     ("Calendar", "/calendar"),
-    ("Plants", "/plants"),
     ("Varieties", "/seed-varieties"),
     ("Plantings", "/plantings"),
 ]

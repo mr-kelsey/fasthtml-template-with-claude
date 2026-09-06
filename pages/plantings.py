@@ -72,7 +72,7 @@ def _planting_form(action, submit_label, varieties, planting=None):
         fast.Select(
             *[
                 fast.Option(
-                    f"{variety['plant_name']} - {variety['name']}",
+                    f"{variety['common_name']} - {variety['name']}",
                     value=str(variety["id"]),
                     selected=(variety["id"] == selected_variety_id),
                 )
@@ -111,7 +111,7 @@ def _planting_row(planting, warnings):
     harvest_window = _window(planting["planted_date"], planting["days_to_maturity_min"], planting["days_to_maturity_max"])
     return fast.Tr(
         fast.Td(planting["variety_name"] or ""),
-        fast.Td(planting["plant_name"] or ""),
+        fast.Td(planting["common_name"] or ""),
         fast.Td(planting["planted_date"]),
         fast.Td(planting["location"] or ""),
         fast.Td(planting["quantity"] if planting["quantity"] is not None else ""),
@@ -136,7 +136,7 @@ def list_plantings_page():
     plantings = db.list_plantings()
     warnings = _overlap_warnings(plantings)
     headers = [
-        "Variety", "Plant", "Planted", "Location", "Qty", "Germinated",
+        "Variety", "Common Name", "Planted", "Location", "Qty", "Germinated",
         "Germination window", "Harvest window", "Warnings", "",
     ]
     rows = (
