@@ -77,7 +77,10 @@ def _recurring_events_by_date(recurring_events, weeks):
     by_date = {}
     for week in weeks:
         for day_date in week:
-            matches = [r for r in recurring_events if r["month"] == day_date.month and r["day"] == day_date.day]
+            matches = [
+                recurring_event for recurring_event in recurring_events 
+                if recurring_event["month"] == day_date.month and recurring_event["day"] == day_date.day
+                ]
             if matches:
                 by_date[day_date] = matches
     return by_date
@@ -147,9 +150,7 @@ def _month_nav(year, month, member_id):
 
 def _filter_row(year, month, member_id):
     def link(label, target_member_id, is_active):
-        href = f"/calendar?year={year}&month={month}"
-        if target_member_id:
-            href += f"&member_id={target_member_id}"
+        href = _calendar_url(year, month, target_member_id) if target_member_id else _calendar_url(year, month)
         return fast.A(label, href=href, cls="active" if is_active else "")
 
     links = [link("Everyone", None, member_id is None)]

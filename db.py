@@ -108,6 +108,18 @@ class Database:
                 {"id": event_id},
             ).mappings().first()
 
+    @staticmethod
+    def _normalize_event_fields(title, start_date, end_date, start_time, end_time, notes, is_critical):
+        return {
+            "title": title,
+            "start_date": start_date,
+            "end_date": end_date or start_date,
+            "start_time": start_time or None,
+            "end_time": end_time or None,
+            "notes": notes or None,
+            "is_critical": int(bool(is_critical)),
+        }
+
     def add_event(
         self,
         owner_id: str,
@@ -119,6 +131,7 @@ class Database:
         notes: str,
         is_critical: bool,
     ):
+        fields = self._normalize_event_fields(title, start_date, end_date, start_time, end_time, notes, is_critical)
         with self.engine.begin() as db_connection:
             db_connection.execute(
                 text(
@@ -126,16 +139,7 @@ class Database:
                     "(owner_id, title, start_date, end_date, start_time, end_time, notes, is_critical) "
                     "VALUES (:owner_id, :title, :start_date, :end_date, :start_time, :end_time, :notes, :is_critical)"
                 ),
-                {
-                    "owner_id": owner_id,
-                    "title": title,
-                    "start_date": start_date,
-                    "end_date": end_date or start_date,
-                    "start_time": start_time or None,
-                    "end_time": end_time or None,
-                    "notes": notes or None,
-                    "is_critical": int(bool(is_critical)),
-                },
+                {"owner_id": owner_id, **fields},
             )
 
     def update_event(
@@ -149,6 +153,7 @@ class Database:
         notes: str,
         is_critical: bool,
     ):
+        fields = self._normalize_event_fields(title, start_date, end_date, start_time, end_time, notes, is_critical)
         with self.engine.begin() as db_connection:
             db_connection.execute(
                 text(
@@ -156,16 +161,7 @@ class Database:
                     "end_date = :end_date, start_time = :start_time, end_time = :end_time, "
                     "notes = :notes, is_critical = :is_critical WHERE id = :id"
                 ),
-                {
-                    "id": event_id,
-                    "title": title,
-                    "start_date": start_date,
-                    "end_date": end_date or start_date,
-                    "start_time": start_time or None,
-                    "end_time": end_time or None,
-                    "notes": notes or None,
-                    "is_critical": int(bool(is_critical)),
-                },
+                {"id": event_id, **fields},
             )
 
     def delete_event(self, event_id: int):
@@ -210,7 +206,8 @@ _instance = Database()
 
 
 def __getattr__(name):
-    "PEP 562 module delegation: db.list_notes(), db.engine, db.DB_PATH, etc. resolve against whichever \
-Database instance is current, so tests can swap it (db._instance = db.Database('.env.test')) with no \
-changes needed in main.py/pages/*.py, which always go through `db.<name>` rather than binding it early."
+    """PEP 562 module delegation: db.list_notes(), db.engine, db.DB_PATH, etc. resolve against whichever 
+    Database instance is current, so tests can swap it (db._instance = db.Database('.env.test')) with no 
+    changes needed in main.py/pages/*.py, which always go through `db.<name>` rather than binding it early.
+    """
     return getattr(_instance, name)
