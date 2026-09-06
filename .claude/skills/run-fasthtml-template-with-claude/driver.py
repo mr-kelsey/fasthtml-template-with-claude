@@ -58,9 +58,9 @@ def main():
         page.wait_for_selector("#event-dialog[open]")
         page.screenshot(path=f"{args.screenshot_dir}/02-dialog.png")
 
-        page.fill("#event-dialog input[name='title']", "Driver Smoke Test")
-        page.check("#event-dialog input[name='is_critical']")
-        page.click("#event-dialog button:has-text('Add Event')")
+        page.fill("#add-event-form input[name='title']", "Driver Smoke Test")
+        page.check("#add-event-form input[name='is_critical']")
+        page.click("#add-event-form button[type='submit']")
         page.wait_for_selector(".calendar-grid")
         page.screenshot(path=f"{args.screenshot_dir}/03-after-add.png")
 
