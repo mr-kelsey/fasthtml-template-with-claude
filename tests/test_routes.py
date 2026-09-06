@@ -614,6 +614,56 @@ def test_delete_seed_variety_removes_it(client):
     assert db.list_seed_varieties() == []
 
 
+def test_duplicate_seed_variety_page_returns_200(client):
+    client.post(
+        "/seed-varieties",
+        data={
+            "common_name": "Tomato", "name": "Cherokee Purple", "plant_family": "Solanaceae",
+            "days_to_maturity_min": "60", "days_to_maturity_max": "80",
+        },
+    )
+    variety_id = db.list_seed_varieties()[0]["id"]
+    response = client.get(f"/seed-varieties/{variety_id}/duplicate")
+    assert response.status_code == 200
+
+
+def test_duplicate_seed_variety_page_prefills_source_values(client):
+    client.post(
+        "/seed-varieties",
+        data={
+            "common_name": "Tomato", "name": "Cherokee Purple", "plant_family": "Solanaceae",
+            "days_to_maturity_min": "60", "days_to_maturity_max": "80",
+        },
+    )
+    variety_id = db.list_seed_varieties()[0]["id"]
+    response = client.get(f"/seed-varieties/{variety_id}/duplicate")
+    assert 'value="Solanaceae"' in response.text
+
+
+def test_duplicate_seed_variety_page_posts_to_create_not_update(client):
+    client.post(
+        "/seed-varieties", data={"common_name": "Tomato", "name": "Cherokee Purple", "plant_family": "Solanaceae"}
+    )
+    variety_id = db.list_seed_varieties()[0]["id"]
+    response = client.get(f"/seed-varieties/{variety_id}/duplicate")
+    assert 'action="/seed-varieties"' in response.text
+
+
+def test_duplicate_seed_variety_page_returns_404_when_source_not_found(client):
+    response = client.get("/seed-varieties/999999/duplicate")
+    assert response.status_code == 404
+
+
+def test_submitting_duplicated_variety_creates_a_second_row(client):
+    client.post(
+        "/seed-varieties", data={"common_name": "Tomato", "name": "Cherokee Purple", "plant_family": "Solanaceae"}
+    )
+    client.post(
+        "/seed-varieties", data={"common_name": "Tomato", "name": "Cherokee Purple", "plant_family": "Solanaceae"}
+    )
+    assert len(db.list_seed_varieties()) == 2
+
+
 def _create_variety(client, common_name="Tomato", variety_name="Cherokee Purple", plant_family="Solanaceae", **variety_fields):
     client.post(
         "/seed-varieties",

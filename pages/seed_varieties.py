@@ -90,6 +90,8 @@ def _variety_row(variety):
         fast.Td(variety["water_needs"] or ""),
         fast.Td(
             fast.A("Edit", href=f"/seed-varieties/{variety['id']}/edit"),
+            " ",
+            fast.A("Duplicate", href=f"/seed-varieties/{variety['id']}/duplicate"),
             fast.Form(
                 fast.Button("Delete", type="submit"),
                 method="post",
@@ -103,7 +105,7 @@ def _variety_row(variety):
 def list_seed_varieties_page():
     varieties = db.list_seed_varieties()
     headers = [
-        "Name", "Common Name", "Family", "Genus", "Species",
+        "Variety", "Common Name", "Family", "Genus", "Species",
         "Germination (days)", "Maturity (days)", "Spacing (in)", "Sun", "Water", "",
     ]
     rows = (
@@ -181,6 +183,20 @@ def edit_seed_variety_page(variety_id: int):
         "Edit Seed Variety",
         fast.H1("Edit Seed Variety"),
         _variety_form(action=f"/seed-varieties/{variety_id}/edit", submit_label="Save Changes", variety=variety),
+    )
+
+
+@router("/seed-varieties/{variety_id}/duplicate", methods=["get"])
+def duplicate_seed_variety_page(variety_id: int):
+    "Prefills the add form from an existing variety -- posts to the create route, not update, so it makes a new row."
+    variety = db.get_seed_variety(variety_id)
+    if variety is None:
+        return fast.Response("Seed variety not found.", status_code=404)
+    return layout(
+        "Duplicate Seed Variety",
+        fast.H1("Duplicate Seed Variety"),
+        fast.P("Edit anything that differs, then save to create a new variety."),
+        _variety_form(action="/seed-varieties", submit_label="Add Variety", variety=variety),
     )
 
 
