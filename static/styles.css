@@ -94,6 +94,21 @@ table form {
     border-radius: 2px;
 }
 
+.recurring-labels {
+    margin-top: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+}
+
+.recurring-label {
+    font-size: 0.7rem;
+    color: var(--pico-muted-color);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
 dialog#event-dialog {
     max-width: 28rem;
     width: 100%;

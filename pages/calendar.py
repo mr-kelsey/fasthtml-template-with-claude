@@ -73,13 +73,27 @@ def _events_by_date(events, grid_start, grid_end):
     return by_date
 
 
+def _recurring_events_by_date(recurring_events, weeks):
+    by_date = {}
+    for week in weeks:
+        for day_date in week:
+            matches = [r for r in recurring_events if r["month"] == day_date.month and r["day"] == day_date.day]
+            if matches:
+                by_date[day_date] = matches
+    return by_date
+
+
 def _event_bar(event):
     member = get_member(event["owner_id"])
     color = member["color"] if member else "#999999"
     return fast.Div(cls="event-bar", style=f"background-color: {color}", title=event["title"])
 
 
-def _day_square(day_date, events_for_day, in_current_month, is_today, year, month, member_id):
+def _recurring_label(recurring_event):
+    return fast.Div(recurring_event["title"], cls="recurring-label")
+
+
+def _day_square(day_date, events_for_day, recurring_for_day, in_current_month, is_today, year, month, member_id):
     classes = ["day-square"]
     if not in_current_month:
         classes.append("outside-month")
@@ -89,7 +103,8 @@ def _day_square(day_date, events_for_day, in_current_month, is_today, year, mont
         classes.append("critical-day")
     return fast.Div(
         fast.Div(str(day_date.day), cls="day-number"),
-        *[_event_bar(event) for event in events_for_day],
+        fast.Div(*[_event_bar(event) for event in events_for_day], cls="event-bars"),
+        fast.Div(*[_recurring_label(r) for r in recurring_for_day], cls="recurring-labels"),
         cls=" ".join(classes),
         hx_get=_calendar_url(year, month, member_id, base=f"/calendar/day/{day_date.isoformat()}"),
         hx_target="#event-dialog-body",
@@ -98,7 +113,7 @@ def _day_square(day_date, events_for_day, in_current_month, is_today, year, mont
     )
 
 
-def _calendar_grid(weeks, month, events_by_date, today, year, member_id):
+def _calendar_grid(weeks, month, events_by_date, recurring_by_date, today, year, member_id):
     cells = [fast.Div(label, cls="calendar-weekday") for label in WEEKDAY_LABELS]
     for week in weeks:
         for day_date in week:
@@ -106,6 +121,7 @@ def _calendar_grid(weeks, month, events_by_date, today, year, member_id):
                 _day_square(
                     day_date,
                     events_by_date.get(day_date, []),
+                    recurring_by_date.get(day_date, []),
                     day_date.month == month,
                     day_date == today,
                     year,
@@ -188,6 +204,66 @@ def _event_form(
     )
 
 
+def _validate_recurring_event(title, month, day):
+    "Returns (title, month, day) or an error fast.Response. Validated against a leap year so Feb 29 is allowed."
+    title = title.strip()
+    if not title:
+        return fast.Response("Title is required.", status_code=422)
+    try:
+        month, day = int(month), int(day)
+        date(2000, month, day)
+    except (TypeError, ValueError):
+        return fast.Response("Invalid month/day.", status_code=422)
+    return title, month, day
+
+
+def _month_select(selected_month=None):
+    return fast.Select(
+        *[
+            fast.Option(cal.month_name[month], value=str(month), selected=(month == selected_month))
+            for month in range(1, 13)
+        ],
+        name="month",
+        required=True,
+    )
+
+
+def _recurring_event_form(action, submit_label, recurring_event=None):
+    return fast.Form(
+        fast.Input(
+            name="title", placeholder="Title", value=recurring_event["title"] if recurring_event else "", required=True
+        ),
+        _month_select(recurring_event["month"] if recurring_event else None),
+        fast.Input(
+            name="day",
+            type="number",
+            min="1",
+            max="31",
+            value=recurring_event["day"] if recurring_event else "",
+            required=True,
+        ),
+        fast.Button(submit_label, type="submit"),
+        method="post",
+        action=action,
+    )
+
+
+def _recurring_event_row(recurring_event):
+    return fast.Li(
+        _recurring_event_form(
+            action=f"/calendar/recurring/{recurring_event['id']}/edit",
+            submit_label="Save",
+            recurring_event=recurring_event,
+        ),
+        fast.Form(
+            fast.Button("Delete", type="submit"),
+            method="post",
+            action=f"/calendar/recurring/{recurring_event['id']}/delete",
+        ),
+        cls="recurring-event-row",
+    )
+
+
 def _delete_event_form(event_id, year, month, member_id):
     return fast.Form(
         fast.Input(type="hidden", name="redirect_year", value=str(year)),
@@ -210,12 +286,14 @@ def calendar_page(sess, year: int = None, month: int = None, member_id: str = No
     grid_start, grid_end = weeks[0][0], weeks[-1][-1]
     events = db.list_events_in_range(grid_start.isoformat(), grid_end.isoformat(), owner_id=member_id or None)
     events_by_date = _events_by_date(events, grid_start, grid_end)
+    recurring_by_date = _recurring_events_by_date(db.list_recurring_events(), weeks)
     return layout(
         "Calendar",
         fast.H1("Family Calendar"),
         _month_nav(year, month, member_id),
         _filter_row(year, month, member_id),
-        _calendar_grid(weeks, month, events_by_date, today, year, member_id),
+        fast.A("Manage yearly events", href="/calendar/recurring", cls="manage-recurring-link"),
+        _calendar_grid(weeks, month, events_by_date, recurring_by_date, today, year, member_id),
         _event_dialog(),
     )
 
@@ -363,3 +441,44 @@ def edit_event_route(
     year = _parse_int_or(redirect_year, start_date_parsed.year)
     month = _parse_int_or(redirect_month, start_date_parsed.month)
     return fast.Redirect(_calendar_url(year, month, redirect_member_id))
+
+
+@router("/calendar/recurring", methods=["get"])
+def recurring_events_page(sess):
+    recurring_events = db.list_recurring_events()
+    return layout(
+        "Yearly Events",
+        fast.H1("Yearly Events"),
+        fast.P("These repeat every year and are visible to everyone, regardless of the family member filter."),
+        fast.Ul(*[_recurring_event_row(r) for r in recurring_events])
+        if recurring_events
+        else fast.P("No yearly events yet."),
+        _recurring_event_form(action="/calendar/recurring", submit_label="Add Yearly Event"),
+        fast.A("Back to calendar", href="/calendar"),
+    )
+
+
+@router("/calendar/recurring", methods=["post"])
+def add_recurring_event_route(sess, title: str, month: str, day: str):
+    validated = _validate_recurring_event(title, month, day)
+    if isinstance(validated, fast.Response):
+        return validated
+    title, month, day = validated
+    db.add_recurring_event(title, month, day)
+    return fast.Redirect("/calendar/recurring")
+
+
+@router("/calendar/recurring/{event_id}/edit", methods=["post"])
+def edit_recurring_event_route(sess, event_id: int, title: str, month: str, day: str):
+    validated = _validate_recurring_event(title, month, day)
+    if isinstance(validated, fast.Response):
+        return validated
+    title, month, day = validated
+    db.update_recurring_event(event_id, title, month, day)
+    return fast.Redirect("/calendar/recurring")
+
+
+@router("/calendar/recurring/{event_id}/delete", methods=["post"])
+def delete_recurring_event_route(sess, event_id: int):
+    db.delete_recurring_event(event_id)
+    return fast.Redirect("/calendar/recurring")

@@ -419,6 +419,91 @@ def test_edit_event_rejects_end_date_before_start_date(client):
     assert response.status_code == 422
 
 
+def test_calendar_recurring_page_returns_200(client):
+    response = client.get("/calendar/recurring")
+    assert response.status_code == 200
+
+
+def test_add_recurring_event_redirects_with_303(client):
+    response = client.post(
+        "/calendar/recurring", data={"title": "Mom's Birthday", "month": "9", "day": "15"}, follow_redirects=False
+    )
+    assert response.status_code == 303
+
+
+def test_add_recurring_event_appears_on_recurring_page(client):
+    client.post("/calendar/recurring", data={"title": "Mom's Birthday", "month": "9", "day": "15"})
+    response = client.get("/calendar/recurring")
+    assert "Mom's Birthday" in response.text
+
+
+def test_add_recurring_event_rejects_blank_title(client):
+    response = client.post("/calendar/recurring", data={"title": "", "month": "9", "day": "15"})
+    assert response.status_code == 422
+
+
+def test_add_recurring_event_rejects_invalid_day_for_month(client):
+    response = client.post("/calendar/recurring", data={"title": "Bad Date", "month": "4", "day": "31"})
+    assert response.status_code == 422
+
+
+def test_add_recurring_event_rejects_malformed_day(client):
+    response = client.post("/calendar/recurring", data={"title": "Bad Date", "month": "9", "day": "not-a-number"})
+    assert response.status_code == 422
+
+
+def test_recurring_event_appears_on_calendar_grid(client):
+    client.post("/calendar/recurring", data={"title": "Mom's Birthday", "month": str(CAL_MONTH), "day": "15"})
+    response = client.get(_calendar_url())
+    assert "Mom's Birthday" in response.text
+
+
+def test_recurring_event_recurs_into_following_year(client):
+    client.post("/calendar/recurring", data={"title": "Mom's Birthday", "month": str(CAL_MONTH), "day": "15"})
+    response = client.get(_calendar_url(year=CAL_YEAR + 1))
+    assert "Mom's Birthday" in response.text
+
+
+def test_recurring_event_ignores_member_filter(client):
+    client.post("/calendar/recurring", data={"title": "Mom's Birthday", "month": str(CAL_MONTH), "day": "15"})
+    response = client.get(_calendar_url(member_id=FAMILY_MEMBERS[0]["id"]))
+    assert "Mom's Birthday" in response.text
+
+
+def test_recurring_event_does_not_appear_in_day_fragment(client):
+    client.post("/calendar/recurring", data={"title": "Mom's Birthday", "month": str(CAL_MONTH), "day": "15"})
+    response = client.get(f"/calendar/day/{CAL_YEAR}-{CAL_MONTH:02d}-15")
+    assert "Mom's Birthday" not in response.text
+
+
+def test_edit_recurring_event_updates_title(client):
+    client.post("/calendar/recurring", data={"title": "Original", "month": "9", "day": "15"})
+    event_id = db.list_recurring_events()[0]["id"]
+    client.post(f"/calendar/recurring/{event_id}/edit", data={"title": "Updated", "month": "9", "day": "15"})
+    response = client.get("/calendar/recurring")
+    assert "Updated" in response.text
+
+
+def test_delete_recurring_event_removes_it_from_grid(client):
+    client.post("/calendar/recurring", data={"title": "Mom's Birthday", "month": str(CAL_MONTH), "day": "15"})
+    event_id = db.list_recurring_events()[0]["id"]
+    client.post(f"/calendar/recurring/{event_id}/delete")
+    response = client.get(_calendar_url())
+    assert "Mom's Birthday" not in response.text
+
+
+def test_recurring_event_on_feb_29_does_not_appear_in_non_leap_year(client):
+    client.post("/calendar/recurring", data={"title": "Leap Day", "month": "2", "day": "29"})
+    response = client.get(_calendar_url(year=2026, month=2))
+    assert "Leap Day" not in response.text
+
+
+def test_recurring_event_on_feb_29_appears_in_leap_year(client):
+    client.post("/calendar/recurring", data={"title": "Leap Day", "month": "2", "day": "29"})
+    response = client.get(_calendar_url(year=2028, month=2))
+    assert "Leap Day" in response.text
+
+
 def test_edit_event_redirects_to_requested_month_and_member_filter(client):
     _pick_member(client, FAMILY_MEMBERS[0]["id"])
     client.post("/calendar", data={"title": "Owned", "start_date": f"{CAL_YEAR}-{CAL_MONTH:02d}-01"})

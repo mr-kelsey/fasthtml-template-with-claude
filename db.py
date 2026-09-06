@@ -26,11 +26,22 @@ SCHEMA_STATEMENTS = [
         created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
     )
     """,
+    """
+    CREATE TABLE IF NOT EXISTS recurring_events (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        title TEXT NOT NULL,
+        month INTEGER NOT NULL,
+        day INTEGER NOT NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
+    """,
 ]
 
 _EVENT_COLUMNS = (
     "id, owner_id, title, start_date, end_date, start_time, end_time, notes, is_critical, created_at"
 )
+
+_RECURRING_EVENT_COLUMNS = "id, title, month, day, created_at"
 
 
 class Database:
@@ -160,6 +171,39 @@ class Database:
     def delete_event(self, event_id: int):
         with self.engine.begin() as db_connection:
             db_connection.execute(text("DELETE FROM calendar_events WHERE id = :id"), {"id": event_id})
+
+    def list_recurring_events(self):
+        with self.engine.connect() as db_connection:
+            return db_connection.execute(
+                text(f"SELECT {_RECURRING_EVENT_COLUMNS} FROM recurring_events ORDER BY month, day")
+            ).mappings().all()
+
+    def get_recurring_event(self, event_id: int):
+        with self.engine.connect() as db_connection:
+            return db_connection.execute(
+                text(f"SELECT {_RECURRING_EVENT_COLUMNS} FROM recurring_events WHERE id = :id"),
+                {"id": event_id},
+            ).mappings().first()
+
+    def add_recurring_event(self, title: str, month: int, day: int):
+        with self.engine.begin() as db_connection:
+            db_connection.execute(
+                text("INSERT INTO recurring_events (title, month, day) VALUES (:title, :month, :day)"),
+                {"title": title, "month": month, "day": day},
+            )
+
+    def update_recurring_event(self, event_id: int, title: str, month: int, day: int):
+        with self.engine.begin() as db_connection:
+            db_connection.execute(
+                text(
+                    "UPDATE recurring_events SET title = :title, month = :month, day = :day WHERE id = :id"
+                ),
+                {"id": event_id, "title": title, "month": month, "day": day},
+            )
+
+    def delete_recurring_event(self, event_id: int):
+        with self.engine.begin() as db_connection:
+            db_connection.execute(text("DELETE FROM recurring_events WHERE id = :id"), {"id": event_id})
 
 
 _instance = Database()

@@ -37,6 +37,16 @@ def _clean_calendar_events():
         db_connection.execute(text("DELETE FROM calendar_events"))
 
 
+@pytest.fixture(autouse=True)
+def _clean_recurring_events():
+    "Start and end each test with an empty recurring_events table in the isolated test database (.env.test)."
+    with db.engine.begin() as db_connection:
+        db_connection.execute(text("DELETE FROM recurring_events"))
+    yield
+    with db.engine.begin() as db_connection:
+        db_connection.execute(text("DELETE FROM recurring_events"))
+
+
 @pytest.fixture
 def client():
     with TestClient(app) as test_client:

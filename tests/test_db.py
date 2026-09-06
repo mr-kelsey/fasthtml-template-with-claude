@@ -143,3 +143,50 @@ def test_update_event_defaults_end_date_to_start_date_when_omitted():
     event_id = db.list_events()[0]["id"]
     db.update_event(event_id, "Trip", "2026-09-02", None, None, None, None, False)
     assert db.get_event(event_id)["end_date"] == "2026-09-02"
+
+
+def test_list_recurring_events_returns_empty_list_when_none_exist():
+    assert db.list_recurring_events() == []
+
+
+def test_add_recurring_event_persists_title_month_day():
+    db.add_recurring_event("Birthday", 9, 15)
+    events = db.list_recurring_events()
+    assert [(e["title"], e["month"], e["day"]) for e in events] == [("Birthday", 9, 15)]
+
+
+def test_recurring_events_ordered_by_month_then_day():
+    db.add_recurring_event("December", 12, 1)
+    db.add_recurring_event("January", 1, 1)
+    events = db.list_recurring_events()
+    assert [e["title"] for e in events] == ["January", "December"]
+
+
+def test_get_recurring_event_returns_matching_row():
+    db.add_recurring_event("Lookup", 6, 10)
+    event_id = db.list_recurring_events()[0]["id"]
+    event = db.get_recurring_event(event_id)
+    assert event["title"] == "Lookup"
+
+
+def test_get_recurring_event_returns_none_when_not_found():
+    assert db.get_recurring_event(999999) is None
+
+
+def test_update_recurring_event_changes_title():
+    db.add_recurring_event("Original", 6, 10)
+    event_id = db.list_recurring_events()[0]["id"]
+    db.update_recurring_event(event_id, "Updated", 6, 10)
+    assert db.get_recurring_event(event_id)["title"] == "Updated"
+
+
+def test_delete_recurring_event_removes_it():
+    db.add_recurring_event("To delete", 6, 10)
+    event_id = db.list_recurring_events()[0]["id"]
+    db.delete_recurring_event(event_id)
+    assert db.list_recurring_events() == []
+
+
+def test_delete_nonexistent_recurring_event_is_a_noop():
+    db.delete_recurring_event(999999)
+    assert db.list_recurring_events() == []
