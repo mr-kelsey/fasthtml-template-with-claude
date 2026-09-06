@@ -520,3 +520,221 @@ def test_edit_event_redirects_to_requested_month_and_member_filter(client):
         follow_redirects=False,
     )
     assert response.headers["location"] == f"/calendar?year=2026&month=10&member_id={FAMILY_MEMBERS[0]['id']}"
+
+
+def test_plants_page_returns_200(client):
+    response = client.get("/plants")
+    assert response.status_code == 200
+
+
+def test_plants_page_shows_empty_state_when_no_plants_exist(client):
+    response = client.get("/plants")
+    assert "No plants yet" in response.text
+
+
+def test_add_plant_redirects_with_303(client):
+    response = client.post("/plants", data={"name": "Tomato"}, follow_redirects=False)
+    assert response.status_code == 303
+
+
+def test_add_plant_appears_in_list(client):
+    client.post("/plants", data={"name": "Tomato"})
+    response = client.get("/plants")
+    assert "Tomato" in response.text
+
+
+def test_add_plant_rejects_blank_name(client):
+    response = client.post("/plants", data={"name": ""})
+    assert response.status_code == 422
+
+
+def test_add_plant_rejects_non_numeric_germination_days(client):
+    response = client.post("/plants", data={"name": "Tomato", "germination_days_min": "not-a-number"})
+    assert response.status_code == 422
+
+
+def test_edit_plant_page_shows_prefilled_name(client):
+    client.post("/plants", data={"name": "Tomato"})
+    plant_id = db.list_plants()[0]["id"]
+    response = client.get(f"/plants/{plant_id}/edit")
+    assert 'value="Tomato"' in response.text
+
+
+def test_edit_plant_updates_name(client):
+    client.post("/plants", data={"name": "Original"})
+    plant_id = db.list_plants()[0]["id"]
+    client.post(f"/plants/{plant_id}/edit", data={"name": "Updated"})
+    assert db.get_plant(plant_id)["name"] == "Updated"
+
+
+def test_delete_plant_removes_it(client):
+    client.post("/plants", data={"name": "To delete"})
+    plant_id = db.list_plants()[0]["id"]
+    client.post(f"/plants/{plant_id}/delete")
+    assert db.list_plants() == []
+
+
+def test_seed_varieties_page_returns_200(client):
+    response = client.get("/seed-varieties")
+    assert response.status_code == 200
+
+
+def test_seed_varieties_page_prompts_to_add_a_plant_when_none_exist(client):
+    response = client.get("/seed-varieties")
+    assert "Add a plant" in response.text
+
+
+def test_add_seed_variety_redirects_with_303(client):
+    client.post("/plants", data={"name": "Tomato"})
+    plant_id = db.list_plants()[0]["id"]
+    response = client.post(
+        "/seed-varieties", data={"plant_id": str(plant_id), "name": "Cherokee Purple"}, follow_redirects=False
+    )
+    assert response.status_code == 303
+
+
+def test_add_seed_variety_appears_in_list(client):
+    client.post("/plants", data={"name": "Tomato"})
+    plant_id = db.list_plants()[0]["id"]
+    client.post("/seed-varieties", data={"plant_id": str(plant_id), "name": "Cherokee Purple"})
+    response = client.get("/seed-varieties")
+    assert "Cherokee Purple" in response.text
+
+
+def test_add_seed_variety_rejects_blank_name(client):
+    client.post("/plants", data={"name": "Tomato"})
+    plant_id = db.list_plants()[0]["id"]
+    response = client.post("/seed-varieties", data={"plant_id": str(plant_id), "name": ""})
+    assert response.status_code == 422
+
+
+def test_add_seed_variety_rejects_unknown_plant_id(client):
+    response = client.post("/seed-varieties", data={"plant_id": "999999", "name": "Cherokee Purple"})
+    assert response.status_code == 422
+
+
+def test_add_seed_variety_rejects_non_numeric_override(client):
+    client.post("/plants", data={"name": "Tomato"})
+    plant_id = db.list_plants()[0]["id"]
+    response = client.post(
+        "/seed-varieties",
+        data={"plant_id": str(plant_id), "name": "Cherokee Purple", "spacing_in": "not-a-number"},
+    )
+    assert response.status_code == 422
+
+
+def test_edit_seed_variety_updates_name(client):
+    client.post("/plants", data={"name": "Tomato"})
+    plant_id = db.list_plants()[0]["id"]
+    client.post("/seed-varieties", data={"plant_id": str(plant_id), "name": "Original"})
+    variety_id = db.list_seed_varieties()[0]["id"]
+    client.post(f"/seed-varieties/{variety_id}/edit", data={"plant_id": str(plant_id), "name": "Updated"})
+    assert db.get_seed_variety(variety_id)["name"] == "Updated"
+
+
+def test_delete_seed_variety_removes_it(client):
+    client.post("/plants", data={"name": "Tomato"})
+    plant_id = db.list_plants()[0]["id"]
+    client.post("/seed-varieties", data={"plant_id": str(plant_id), "name": "To delete"})
+    variety_id = db.list_seed_varieties()[0]["id"]
+    client.post(f"/seed-varieties/{variety_id}/delete")
+    assert db.list_seed_varieties() == []
+
+
+def _create_variety(client, plant_name="Tomato", variety_name="Cherokee Purple", **plant_fields):
+    client.post("/plants", data={"name": plant_name, **plant_fields})
+    plant_id = db.list_plants()[0]["id"]
+    client.post("/seed-varieties", data={"plant_id": str(plant_id), "name": variety_name})
+    return db.list_seed_varieties()[0]["id"]
+
+
+def test_plantings_page_returns_200(client):
+    response = client.get("/plantings")
+    assert response.status_code == 200
+
+
+def test_plantings_page_prompts_to_add_a_seed_variety_when_none_exist(client):
+    response = client.get("/plantings")
+    assert "Add a seed variety" in response.text
+
+
+def test_add_planting_redirects_with_303(client):
+    variety_id = _create_variety(client)
+    response = client.post(
+        "/plantings", data={"variety_id": str(variety_id), "planted_date": "2026-05-01"}, follow_redirects=False
+    )
+    assert response.status_code == 303
+
+
+def test_add_planting_appears_in_list(client):
+    variety_id = _create_variety(client)
+    client.post("/plantings", data={"variety_id": str(variety_id), "planted_date": "2026-05-01"})
+    response = client.get("/plantings")
+    assert "Cherokee Purple" in response.text
+
+
+def test_add_planting_rejects_unknown_variety_id(client):
+    response = client.post("/plantings", data={"variety_id": "999999", "planted_date": "2026-05-01"})
+    assert response.status_code == 422
+
+
+def test_add_planting_rejects_malformed_planted_date(client):
+    variety_id = _create_variety(client)
+    response = client.post("/plantings", data={"variety_id": str(variety_id), "planted_date": "not-a-date"})
+    assert response.status_code == 422
+
+
+def test_add_planting_rejects_non_numeric_quantity(client):
+    variety_id = _create_variety(client)
+    response = client.post(
+        "/plantings",
+        data={"variety_id": str(variety_id), "planted_date": "2026-05-01", "quantity": "not-a-number"},
+    )
+    assert response.status_code == 422
+
+
+def test_edit_planting_updates_quantity(client):
+    variety_id = _create_variety(client)
+    client.post("/plantings", data={"variety_id": str(variety_id), "planted_date": "2026-05-01", "quantity": "10"})
+    planting_id = db.list_plantings()[0]["id"]
+    client.post(
+        f"/plantings/{planting_id}/edit",
+        data={"variety_id": str(variety_id), "planted_date": "2026-05-01", "quantity": "20"},
+    )
+    assert db.get_planting(planting_id)["quantity"] == 20
+
+
+def test_delete_planting_removes_it(client):
+    variety_id = _create_variety(client)
+    client.post("/plantings", data={"variety_id": str(variety_id), "planted_date": "2026-05-01"})
+    planting_id = db.list_plantings()[0]["id"]
+    client.post(f"/plantings/{planting_id}/delete")
+    assert db.list_plantings() == []
+
+
+def test_overlapping_plantings_at_same_location_show_warning(client):
+    variety_id = _create_variety(client, days_to_maturity_min="60", days_to_maturity_max="70")
+    client.post(
+        "/plantings",
+        data={"variety_id": str(variety_id), "planted_date": "2026-05-01", "location": "Bed 3 row 2"},
+    )
+    client.post(
+        "/plantings",
+        data={"variety_id": str(variety_id), "planted_date": "2026-05-05", "location": "Bed 3 row 2"},
+    )
+    response = client.get("/plantings")
+    assert "Overlaps with" in response.text
+
+
+def test_non_overlapping_plantings_at_same_location_show_no_warning(client):
+    variety_id = _create_variety(client, days_to_maturity_min="60", days_to_maturity_max="70")
+    client.post(
+        "/plantings",
+        data={"variety_id": str(variety_id), "planted_date": "2026-05-01", "location": "Bed 3 row 2"},
+    )
+    client.post(
+        "/plantings",
+        data={"variety_id": str(variety_id), "planted_date": "2026-09-01", "location": "Bed 3 row 2"},
+    )
+    response = client.get("/plantings")
+    assert "Overlaps with" not in response.text

@@ -35,6 +35,50 @@ SCHEMA_STATEMENTS = [
         created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
     )
     """,
+    """
+    CREATE TABLE IF NOT EXISTS plants (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        species TEXT,
+        plant_family TEXT,
+        germination_days_min INTEGER,
+        germination_days_max INTEGER,
+        days_to_maturity_min INTEGER,
+        days_to_maturity_max INTEGER,
+        spacing_in INTEGER,
+        sun_needs TEXT,
+        water_needs TEXT,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS seed_varieties (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        plant_id INTEGER NOT NULL,
+        name TEXT NOT NULL,
+        germination_days_min INTEGER,
+        germination_days_max INTEGER,
+        days_to_maturity_min INTEGER,
+        days_to_maturity_max INTEGER,
+        spacing_in INTEGER,
+        sun_needs TEXT,
+        water_needs TEXT,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS plantings (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        variety_id INTEGER NOT NULL,
+        bed_id INTEGER,
+        location TEXT,
+        planted_date TEXT NOT NULL,
+        quantity INTEGER,
+        quantity_germinated INTEGER,
+        notes TEXT,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
+    """,
 ]
 
 _EVENT_COLUMNS = (
@@ -42,6 +86,40 @@ _EVENT_COLUMNS = (
 )
 
 _RECURRING_EVENT_COLUMNS = "id, title, month, day, created_at"
+
+_AGRONOMIC_COLUMNS = (
+    "germination_days_min, germination_days_max, days_to_maturity_min, days_to_maturity_max, "
+    "spacing_in, sun_needs, water_needs"
+)
+
+_PLANT_COLUMNS = f"id, name, species, plant_family, {_AGRONOMIC_COLUMNS}, created_at"
+
+_SEED_VARIETY_COLUMNS = f"id, plant_id, name, {_AGRONOMIC_COLUMNS}, created_at"
+
+_PLANTING_COLUMNS = (
+    "id, variety_id, bed_id, location, planted_date, quantity, quantity_germinated, notes, created_at"
+)
+
+
+def _agronomic_fields(
+    germination_days_min: int,
+    germination_days_max: int,
+    days_to_maturity_min: int,
+    days_to_maturity_max: int,
+    spacing_in: int,
+    sun_needs: str,
+    water_needs: str,
+):
+    "Shared by plants and seed_varieties, which carry the same agronomic columns (variety values override plant defaults)."
+    return {
+        "germination_days_min": germination_days_min,
+        "germination_days_max": germination_days_max,
+        "days_to_maturity_min": days_to_maturity_min,
+        "days_to_maturity_max": days_to_maturity_max,
+        "spacing_in": spacing_in,
+        "sun_needs": sun_needs or None,
+        "water_needs": water_needs or None,
+    }
 
 
 class Database:
@@ -200,6 +278,249 @@ class Database:
     def delete_recurring_event(self, event_id: int):
         with self.engine.begin() as db_connection:
             db_connection.execute(text("DELETE FROM recurring_events WHERE id = :id"), {"id": event_id})
+
+    def list_plants(self):
+        with self.engine.connect() as db_connection:
+            return db_connection.execute(
+                text(f"SELECT {_PLANT_COLUMNS} FROM plants ORDER BY name")
+            ).mappings().all()
+
+    def get_plant(self, plant_id: int):
+        with self.engine.connect() as db_connection:
+            return db_connection.execute(
+                text(f"SELECT {_PLANT_COLUMNS} FROM plants WHERE id = :id"), {"id": plant_id}
+            ).mappings().first()
+
+    def add_plant(
+        self,
+        name: str,
+        species: str = None,
+        plant_family: str = None,
+        germination_days_min: int = None,
+        germination_days_max: int = None,
+        days_to_maturity_min: int = None,
+        days_to_maturity_max: int = None,
+        spacing_in: int = None,
+        sun_needs: str = None,
+        water_needs: str = None,
+    ):
+        fields = _agronomic_fields(
+            germination_days_min, germination_days_max, days_to_maturity_min, days_to_maturity_max,
+            spacing_in, sun_needs, water_needs,
+        )
+        with self.engine.begin() as db_connection:
+            db_connection.execute(
+                text(
+                    "INSERT INTO plants (name, species, plant_family, germination_days_min, germination_days_max, "
+                    "days_to_maturity_min, days_to_maturity_max, spacing_in, sun_needs, water_needs) "
+                    "VALUES (:name, :species, :plant_family, :germination_days_min, :germination_days_max, "
+                    ":days_to_maturity_min, :days_to_maturity_max, :spacing_in, :sun_needs, :water_needs)"
+                ),
+                {"name": name, "species": species or None, "plant_family": plant_family or None, **fields},
+            )
+
+    def update_plant(
+        self,
+        plant_id: int,
+        name: str,
+        species: str = None,
+        plant_family: str = None,
+        germination_days_min: int = None,
+        germination_days_max: int = None,
+        days_to_maturity_min: int = None,
+        days_to_maturity_max: int = None,
+        spacing_in: int = None,
+        sun_needs: str = None,
+        water_needs: str = None,
+    ):
+        fields = _agronomic_fields(
+            germination_days_min, germination_days_max, days_to_maturity_min, days_to_maturity_max,
+            spacing_in, sun_needs, water_needs,
+        )
+        with self.engine.begin() as db_connection:
+            db_connection.execute(
+                text(
+                    "UPDATE plants SET name = :name, species = :species, plant_family = :plant_family, "
+                    "germination_days_min = :germination_days_min, germination_days_max = :germination_days_max, "
+                    "days_to_maturity_min = :days_to_maturity_min, days_to_maturity_max = :days_to_maturity_max, "
+                    "spacing_in = :spacing_in, sun_needs = :sun_needs, water_needs = :water_needs WHERE id = :id"
+                ),
+                {"id": plant_id, "name": name, "species": species or None, "plant_family": plant_family or None, **fields},
+            )
+
+    def delete_plant(self, plant_id: int):
+        with self.engine.begin() as db_connection:
+            db_connection.execute(text("DELETE FROM plants WHERE id = :id"), {"id": plant_id})
+
+    def list_seed_varieties(self):
+        "Effective agronomic values (variety override, falling back to the plant's default) via COALESCE."
+        with self.engine.connect() as db_connection:
+            return db_connection.execute(
+                text(
+                    "SELECT sv.id, sv.plant_id, sv.name, pl.name AS plant_name, "
+                    "COALESCE(sv.germination_days_min, pl.germination_days_min) AS germination_days_min, "
+                    "COALESCE(sv.germination_days_max, pl.germination_days_max) AS germination_days_max, "
+                    "COALESCE(sv.days_to_maturity_min, pl.days_to_maturity_min) AS days_to_maturity_min, "
+                    "COALESCE(sv.days_to_maturity_max, pl.days_to_maturity_max) AS days_to_maturity_max, "
+                    "COALESCE(sv.spacing_in, pl.spacing_in) AS spacing_in, "
+                    "COALESCE(sv.sun_needs, pl.sun_needs) AS sun_needs, "
+                    "COALESCE(sv.water_needs, pl.water_needs) AS water_needs, "
+                    "sv.created_at "
+                    "FROM seed_varieties sv LEFT JOIN plants pl ON pl.id = sv.plant_id "
+                    "ORDER BY sv.name"
+                )
+            ).mappings().all()
+
+    def get_seed_variety(self, variety_id: int):
+        "Raw (unjoined) columns, i.e. only this variety's own overrides -- used to prefill the edit form."
+        with self.engine.connect() as db_connection:
+            return db_connection.execute(
+                text(f"SELECT {_SEED_VARIETY_COLUMNS} FROM seed_varieties WHERE id = :id"),
+                {"id": variety_id},
+            ).mappings().first()
+
+    def add_seed_variety(
+        self,
+        plant_id: int,
+        name: str,
+        germination_days_min: int = None,
+        germination_days_max: int = None,
+        days_to_maturity_min: int = None,
+        days_to_maturity_max: int = None,
+        spacing_in: int = None,
+        sun_needs: str = None,
+        water_needs: str = None,
+    ):
+        fields = _agronomic_fields(
+            germination_days_min, germination_days_max, days_to_maturity_min, days_to_maturity_max,
+            spacing_in, sun_needs, water_needs,
+        )
+        with self.engine.begin() as db_connection:
+            db_connection.execute(
+                text(
+                    "INSERT INTO seed_varieties (plant_id, name, germination_days_min, germination_days_max, "
+                    "days_to_maturity_min, days_to_maturity_max, spacing_in, sun_needs, water_needs) "
+                    "VALUES (:plant_id, :name, :germination_days_min, :germination_days_max, "
+                    ":days_to_maturity_min, :days_to_maturity_max, :spacing_in, :sun_needs, :water_needs)"
+                ),
+                {"plant_id": plant_id, "name": name, **fields},
+            )
+
+    def update_seed_variety(
+        self,
+        variety_id: int,
+        plant_id: int,
+        name: str,
+        germination_days_min: int = None,
+        germination_days_max: int = None,
+        days_to_maturity_min: int = None,
+        days_to_maturity_max: int = None,
+        spacing_in: int = None,
+        sun_needs: str = None,
+        water_needs: str = None,
+    ):
+        fields = _agronomic_fields(
+            germination_days_min, germination_days_max, days_to_maturity_min, days_to_maturity_max,
+            spacing_in, sun_needs, water_needs,
+        )
+        with self.engine.begin() as db_connection:
+            db_connection.execute(
+                text(
+                    "UPDATE seed_varieties SET plant_id = :plant_id, name = :name, "
+                    "germination_days_min = :germination_days_min, germination_days_max = :germination_days_max, "
+                    "days_to_maturity_min = :days_to_maturity_min, days_to_maturity_max = :days_to_maturity_max, "
+                    "spacing_in = :spacing_in, sun_needs = :sun_needs, water_needs = :water_needs WHERE id = :id"
+                ),
+                {"id": variety_id, "plant_id": plant_id, "name": name, **fields},
+            )
+
+    def delete_seed_variety(self, variety_id: int):
+        with self.engine.begin() as db_connection:
+            db_connection.execute(text("DELETE FROM seed_varieties WHERE id = :id"), {"id": variety_id})
+
+    def list_plantings(self):
+        "Joined with seed_varieties/plants so callers get effective (COALESCE'd) maturity data for expected-window math."
+        with self.engine.connect() as db_connection:
+            return db_connection.execute(
+                text(
+                    "SELECT p.id, p.variety_id, p.bed_id, p.location, p.planted_date, p.quantity, "
+                    "p.quantity_germinated, p.notes, p.created_at, "
+                    "sv.name AS variety_name, pl.name AS plant_name, "
+                    "COALESCE(sv.germination_days_min, pl.germination_days_min) AS germination_days_min, "
+                    "COALESCE(sv.germination_days_max, pl.germination_days_max) AS germination_days_max, "
+                    "COALESCE(sv.days_to_maturity_min, pl.days_to_maturity_min) AS days_to_maturity_min, "
+                    "COALESCE(sv.days_to_maturity_max, pl.days_to_maturity_max) AS days_to_maturity_max "
+                    "FROM plantings p "
+                    "LEFT JOIN seed_varieties sv ON sv.id = p.variety_id "
+                    "LEFT JOIN plants pl ON pl.id = sv.plant_id "
+                    "ORDER BY p.planted_date DESC, p.id DESC"
+                )
+            ).mappings().all()
+
+    def get_planting(self, planting_id: int):
+        with self.engine.connect() as db_connection:
+            return db_connection.execute(
+                text(f"SELECT {_PLANTING_COLUMNS} FROM plantings WHERE id = :id"),
+                {"id": planting_id},
+            ).mappings().first()
+
+    @staticmethod
+    def _normalize_planting_fields(bed_id, location, quantity, quantity_germinated, notes):
+        return {
+            "bed_id": bed_id,
+            "location": location or None,
+            "quantity": quantity,
+            "quantity_germinated": quantity_germinated,
+            "notes": notes or None,
+        }
+
+    def add_planting(
+        self,
+        variety_id: int,
+        planted_date: str,
+        bed_id: int = None,
+        location: str = None,
+        quantity: int = None,
+        quantity_germinated: int = None,
+        notes: str = None,
+    ):
+        fields = self._normalize_planting_fields(bed_id, location, quantity, quantity_germinated, notes)
+        with self.engine.begin() as db_connection:
+            db_connection.execute(
+                text(
+                    "INSERT INTO plantings (variety_id, bed_id, location, planted_date, quantity, "
+                    "quantity_germinated, notes) "
+                    "VALUES (:variety_id, :bed_id, :location, :planted_date, :quantity, "
+                    ":quantity_germinated, :notes)"
+                ),
+                {"variety_id": variety_id, "planted_date": planted_date, **fields},
+            )
+
+    def update_planting(
+        self,
+        planting_id: int,
+        variety_id: int,
+        planted_date: str,
+        bed_id: int = None,
+        location: str = None,
+        quantity: int = None,
+        quantity_germinated: int = None,
+        notes: str = None,
+    ):
+        fields = self._normalize_planting_fields(bed_id, location, quantity, quantity_germinated, notes)
+        with self.engine.begin() as db_connection:
+            db_connection.execute(
+                text(
+                    "UPDATE plantings SET variety_id = :variety_id, planted_date = :planted_date, "
+                    "bed_id = :bed_id, location = :location, quantity = :quantity, "
+                    "quantity_germinated = :quantity_germinated, notes = :notes WHERE id = :id"
+                ),
+                {"id": planting_id, "variety_id": variety_id, "planted_date": planted_date, **fields},
+            )
+
+    def delete_planting(self, planting_id: int):
+        with self.engine.begin() as db_connection:
+            db_connection.execute(text("DELETE FROM plantings WHERE id = :id"), {"id": planting_id})
 
 
 _instance = Database()
