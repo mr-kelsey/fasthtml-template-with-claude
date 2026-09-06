@@ -10,3 +10,106 @@ main {
 table form {
     margin: 0;
 }
+
+.month-nav {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    margin-bottom: 1rem;
+}
+
+.month-nav .month-label {
+    font-weight: bold;
+    font-size: 1.1rem;
+}
+
+.filter-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    margin-bottom: 1rem;
+}
+
+.filter-row a {
+    padding: 0.25rem 0.75rem;
+    border: 1px solid var(--pico-muted-border-color);
+    border-radius: var(--pico-border-radius);
+    text-decoration: none;
+}
+
+.filter-row a.active {
+    background-color: var(--pico-primary);
+    color: var(--pico-primary-inverse);
+    border-color: var(--pico-primary);
+}
+
+.calendar-grid {
+    display: grid;
+    grid-template-columns: repeat(7, 1fr);
+    gap: 2px;
+}
+
+.calendar-weekday {
+    text-align: center;
+    font-weight: bold;
+    padding: 0.25rem;
+}
+
+.day-square {
+    min-height: 6rem;
+    border: 1px solid var(--pico-muted-border-color);
+    border-radius: var(--pico-border-radius);
+    padding: 0.25rem;
+    cursor: pointer;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.day-square:hover {
+    background-color: var(--pico-card-sectioning-background-color);
+}
+
+.day-square.outside-month {
+    opacity: 0.4;
+}
+
+.day-square.today {
+    border-color: var(--pico-primary);
+    border-width: 2px;
+}
+
+.day-square.critical-day {
+    border-color: #d62828;
+    border-width: 3px;
+}
+
+.day-number {
+    font-size: 0.85rem;
+    font-weight: bold;
+}
+
+.event-bar {
+    height: 0.4rem;
+    border-radius: 2px;
+}
+
+.recurring-labels {
+    margin-top: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+}
+
+.recurring-label {
+    font-size: 0.7rem;
+    color: var(--pico-muted-color);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+dialog#event-dialog {
+    max-width: 28rem;
+    width: 100%;
+}

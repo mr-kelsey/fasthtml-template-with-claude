@@ -3,45 +3,211 @@ from pathlib import Path
 from dotenv import dotenv_values
 from sqlalchemy import create_engine, text
 
-env = dotenv_values(".env")
+SCHEMA_STATEMENTS = [
+    """
+    CREATE TABLE IF NOT EXISTS notes (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        title TEXT NOT NULL,
+        body TEXT NOT NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS calendar_events (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        owner_id TEXT NOT NULL,
+        title TEXT NOT NULL,
+        start_date TEXT NOT NULL,
+        end_date TEXT NOT NULL,
+        start_time TEXT,
+        end_time TEXT,
+        notes TEXT,
+        is_critical INTEGER NOT NULL DEFAULT 0,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS recurring_events (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        title TEXT NOT NULL,
+        month INTEGER NOT NULL,
+        day INTEGER NOT NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
+    """,
+]
 
-DB_PATH = env.get("DB_PATH", "data/app.db")
-Path(DB_PATH).parent.mkdir(parents=True, exist_ok=True)
+_EVENT_COLUMNS = (
+    "id, owner_id, title, start_date, end_date, start_time, end_time, notes, is_critical, created_at"
+)
 
-DATABASE_URL = f"sqlite:///{DB_PATH}"
-
-engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
-
-SCHEMA_SQL = """
-CREATE TABLE IF NOT EXISTS notes (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    title TEXT NOT NULL,
-    body TEXT NOT NULL,
-    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-"""
+_RECURRING_EVENT_COLUMNS = "id, title, month, day, created_at"
 
 
-def init_db():
-    with engine.begin() as conn:
-        conn.execute(text(SCHEMA_SQL))
+class Database:
+    "Owns one SQLite engine, built from the given dotenv file. Tests build their own instance from .env.test."
 
+    def __init__(self, env_file=".env"):
+        env = dotenv_values(env_file)
+        self.DB_PATH = env.get("DB_PATH", "data/app.db")
+        self._engine = None
 
-def list_notes():
-    with engine.connect() as conn:
-        return conn.execute(
-            text("SELECT id, title, body, created_at FROM notes ORDER BY created_at DESC, id DESC")
-        ).mappings().all()
+    @property
+    def engine(self):
+        if self._engine is None:
+            Path(self.DB_PATH).parent.mkdir(parents=True, exist_ok=True)
+            self._engine = create_engine(f"sqlite:///{self.DB_PATH}", connect_args={"check_same_thread": False})
+        return self._engine
 
+    def init_db(self):
+        with self.engine.begin() as db_connection:
+            for statement in SCHEMA_STATEMENTS:
+                db_connection.execute(text(statement))
 
-def add_note(title: str, body: str):
-    with engine.begin() as conn:
-        conn.execute(
-            text("INSERT INTO notes (title, body) VALUES (:title, :body)"),
-            {"title": title, "body": body},
+    def list_notes(self):
+        with self.engine.connect() as db_connection:
+            return db_connection.execute(
+                text("SELECT id, title, body, created_at FROM notes ORDER BY created_at DESC, id DESC")
+            ).mappings().all()
+
+    def add_note(self, title: str, body: str):
+        with self.engine.begin() as db_connection:
+            db_connection.execute(
+                text("INSERT INTO notes (title, body) VALUES (:title, :body)"),
+                {"title": title, "body": body},
+            )
+
+    def delete_note(self, note_id: int):
+        with self.engine.begin() as db_connection:
+            db_connection.execute(text("DELETE FROM notes WHERE id = :id"), {"id": note_id})
+
+    def list_events(self):
+        with self.engine.connect() as db_connection:
+            return db_connection.execute(
+                text(f"SELECT {_EVENT_COLUMNS} FROM calendar_events ORDER BY start_date, start_time")
+            ).mappings().all()
+
+    def list_events_in_range(self, range_start: str, range_end: str, owner_id: str = None):
+        "Events whose [start_date, end_date] overlaps [range_start, range_end], inclusive."
+        query = (
+            f"SELECT {_EVENT_COLUMNS} FROM calendar_events "
+            "WHERE start_date <= :range_end AND end_date >= :range_start"
         )
+        params = {"range_start": range_start, "range_end": range_end}
+        if owner_id:
+            query += " AND owner_id = :owner_id"
+            params["owner_id"] = owner_id
+        query += " ORDER BY start_date, start_time"
+        with self.engine.connect() as db_connection:
+            return db_connection.execute(text(query), params).mappings().all()
+
+    def get_event(self, event_id: int):
+        with self.engine.connect() as db_connection:
+            return db_connection.execute(
+                text(f"SELECT {_EVENT_COLUMNS} FROM calendar_events WHERE id = :id"),
+                {"id": event_id},
+            ).mappings().first()
+
+    @staticmethod
+    def _normalize_event_fields(title, start_date, end_date, start_time, end_time, notes, is_critical):
+        return {
+            "title": title,
+            "start_date": start_date,
+            "end_date": end_date or start_date,
+            "start_time": start_time or None,
+            "end_time": end_time or None,
+            "notes": notes or None,
+            "is_critical": int(bool(is_critical)),
+        }
+
+    def add_event(
+        self,
+        owner_id: str,
+        title: str,
+        start_date: str,
+        end_date: str,
+        start_time: str,
+        end_time: str,
+        notes: str,
+        is_critical: bool,
+    ):
+        fields = self._normalize_event_fields(title, start_date, end_date, start_time, end_time, notes, is_critical)
+        with self.engine.begin() as db_connection:
+            db_connection.execute(
+                text(
+                    "INSERT INTO calendar_events "
+                    "(owner_id, title, start_date, end_date, start_time, end_time, notes, is_critical) "
+                    "VALUES (:owner_id, :title, :start_date, :end_date, :start_time, :end_time, :notes, :is_critical)"
+                ),
+                {"owner_id": owner_id, **fields},
+            )
+
+    def update_event(
+        self,
+        event_id: int,
+        title: str,
+        start_date: str,
+        end_date: str,
+        start_time: str,
+        end_time: str,
+        notes: str,
+        is_critical: bool,
+    ):
+        fields = self._normalize_event_fields(title, start_date, end_date, start_time, end_time, notes, is_critical)
+        with self.engine.begin() as db_connection:
+            db_connection.execute(
+                text(
+                    "UPDATE calendar_events SET title = :title, start_date = :start_date, "
+                    "end_date = :end_date, start_time = :start_time, end_time = :end_time, "
+                    "notes = :notes, is_critical = :is_critical WHERE id = :id"
+                ),
+                {"id": event_id, **fields},
+            )
+
+    def delete_event(self, event_id: int):
+        with self.engine.begin() as db_connection:
+            db_connection.execute(text("DELETE FROM calendar_events WHERE id = :id"), {"id": event_id})
+
+    def list_recurring_events(self):
+        with self.engine.connect() as db_connection:
+            return db_connection.execute(
+                text(f"SELECT {_RECURRING_EVENT_COLUMNS} FROM recurring_events ORDER BY month, day")
+            ).mappings().all()
+
+    def get_recurring_event(self, event_id: int):
+        with self.engine.connect() as db_connection:
+            return db_connection.execute(
+                text(f"SELECT {_RECURRING_EVENT_COLUMNS} FROM recurring_events WHERE id = :id"),
+                {"id": event_id},
+            ).mappings().first()
+
+    def add_recurring_event(self, title: str, month: int, day: int):
+        with self.engine.begin() as db_connection:
+            db_connection.execute(
+                text("INSERT INTO recurring_events (title, month, day) VALUES (:title, :month, :day)"),
+                {"title": title, "month": month, "day": day},
+            )
+
+    def update_recurring_event(self, event_id: int, title: str, month: int, day: int):
+        with self.engine.begin() as db_connection:
+            db_connection.execute(
+                text(
+                    "UPDATE recurring_events SET title = :title, month = :month, day = :day WHERE id = :id"
+                ),
+                {"id": event_id, "title": title, "month": month, "day": day},
+            )
+
+    def delete_recurring_event(self, event_id: int):
+        with self.engine.begin() as db_connection:
+            db_connection.execute(text("DELETE FROM recurring_events WHERE id = :id"), {"id": event_id})
 
 
-def delete_note(note_id: int):
-    with engine.begin() as conn:
-        conn.execute(text("DELETE FROM notes WHERE id = :id"), {"id": note_id})
+_instance = Database()
+
+
+def __getattr__(name):
+    """PEP 562 module delegation: db.list_notes(), db.engine, db.DB_PATH, etc. resolve against whichever 
+    Database instance is current, so tests can swap it (db._instance = db.Database('.env.test')) with no 
+    changes needed in main.py/pages/*.py, which always go through `db.<name>` rather than binding it early.
+    """
+    return getattr(_instance, name)

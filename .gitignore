@@ -5,3 +5,5 @@ __pycache__/
 .sesskey
 .pytest_cache/
 data/
+family.json
+.claude/skills/run-fasthtml-template-with-claude/screenshots/

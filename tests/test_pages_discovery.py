@@ -21,6 +21,11 @@ def test_discover_page_modules_includes_notes():
     assert "pages.notes" in module_names
 
 
+def test_discover_page_modules_includes_calendar():
+    module_names = [module.__name__ for module in discover_page_modules()]
+    assert "pages.calendar" in module_names
+
+
 def test_discover_page_modules_skips_module_without_router():
     helper_path = PAGES_DIR / "_no_router_helper.py"
     helper_path.write_text("VALUE = 1\n")
