@@ -869,6 +869,12 @@ def test_land_plot_map_page_includes_plot_boundary(client):
     assert "plot-boundary" in response.text
 
 
+def test_land_plot_map_page_includes_north_compass(client):
+    plot_id = _create_plot(client)
+    response = client.get(f"/land-plots/{plot_id}/map")
+    assert "compass" in response.text
+
+
 def test_add_bed_redirects_with_303(client):
     plot_id = _create_plot(client)
     response = client.post(

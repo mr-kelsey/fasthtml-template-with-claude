@@ -210,6 +210,13 @@ def land_plot_map_page(plot_id: int):
         data_plot_width=str(plot["width_ft"]),
         data_plot_length=str(plot["length_ft"]),
     )
+    compass = fast.Div(
+        fast.Div("↑", cls="compass-arrow"),
+        fast.Div("N", cls="compass-label"),
+        cls="compass",
+        title="Map is drawn with north at the top",
+    )
+    canvas_wrap = fast.Div(canvas, compass, cls="land-map-canvas-wrap")
     sidebar = fast.Div(
         fast.H2("Unplaced beds"),
         fast.Ul(*[_unplaced_bed_item(b) for b in unplaced_beds]) if unplaced_beds else fast.P("None."),
@@ -221,7 +228,7 @@ def land_plot_map_page(plot_id: int):
         f"{plot['name']} Map",
         fast.H1(f"{plot['name']} ({plot['width_ft']} x {plot['length_ft']} ft)"),
         fast.A("All plots", href="/land-plots"),
-        fast.Div(canvas, sidebar, cls="land-map-layout"),
+        fast.Div(canvas_wrap, sidebar, cls="land-map-layout"),
         fast.Dialog(fast.Div(id="bed-dialog-body"), id="bed-dialog"),
         fast.Script(src="/land-map.js"),
     )
