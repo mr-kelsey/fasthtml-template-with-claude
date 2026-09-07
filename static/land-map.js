@@ -100,27 +100,27 @@
         var rect = group.querySelector(".bed-rect");
         var label = group.querySelector(".bed-label");
         var startWidth = parseFloat(rect.getAttribute("width"));
-        var startHeight = parseFloat(rect.getAttribute("height"));
+        var startLength = parseFloat(rect.getAttribute("height"));
         var translate = currentTranslate(group);
         var rotateDeg = currentRotateDeg(group);
         var startFeet = toFeet(downEvent.clientX, downEvent.clientY);
         var moved = false;
         var newWidth = startWidth;
-        var newHeight = startHeight;
+        var newLength = startLength;
         handle.setPointerCapture(downEvent.pointerId);
 
-        function applyDimensions(width, height) {
+        function applyDimensions(width, length) {
             rect.setAttribute("width", width);
-            rect.setAttribute("height", height);
+            rect.setAttribute("height", length);
             handle.setAttribute("x", width - 1);
-            handle.setAttribute("y", height - 1);
+            handle.setAttribute("y", length - 1);
             if (label) {
                 label.setAttribute("x", width / 2);
-                label.setAttribute("y", height / 2);
+                label.setAttribute("y", length / 2);
             }
             group.setAttribute(
                 "transform",
-                "translate(" + translate.x + "," + translate.y + ") rotate(" + rotateDeg + "," + width / 2 + "," + height / 2 + ")"
+                "translate(" + translate.x + "," + translate.y + ") rotate(" + rotateDeg + "," + width / 2 + "," + length / 2 + ")"
             );
         }
 
@@ -133,8 +133,8 @@
             }
             var point = toFeet(e.clientX, e.clientY);
             newWidth = Math.max(1, Math.round(startWidth + (point.x - startFeet.x)));
-            newHeight = Math.max(1, Math.round(startHeight + (point.y - startFeet.y)));
-            applyDimensions(newWidth, newHeight);
+            newLength = Math.max(1, Math.round(startLength + (point.y - startFeet.y)));
+            applyDimensions(newWidth, newLength);
         }
 
         function cleanup(e) {
@@ -148,19 +148,19 @@
             cleanup(e);
             if (moved) {
                 suppressNextClick = true;
-                post("/beds/" + bedIdFor(group) + "/size", { width_ft: newWidth, height_ft: newHeight })
+                post("/beds/" + bedIdFor(group) + "/size", { width_ft: newWidth, length_ft: newLength })
                     .then(function (response) {
-                        if (!response.ok) applyDimensions(startWidth, startHeight);
+                        if (!response.ok) applyDimensions(startWidth, startLength);
                     })
                     .catch(function () {
-                        applyDimensions(startWidth, startHeight);
+                        applyDimensions(startWidth, startLength);
                     });
             }
         }
 
         function onCancel(e) {
             cleanup(e);
-            applyDimensions(startWidth, startHeight);
+            applyDimensions(startWidth, startLength);
         }
 
         handle.addEventListener("pointermove", onMove);

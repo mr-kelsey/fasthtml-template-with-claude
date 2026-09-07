@@ -327,7 +327,7 @@ def test_list_land_plots_returns_empty_list_when_none_exist():
 def test_add_land_plot_persists_name_and_dimensions():
     db.add_land_plot("Back Field", 40, 60)
     plot = db.list_land_plots()[0]
-    assert (plot["name"], plot["width_ft"], plot["height_ft"]) == ("Back Field", 40, 60)
+    assert (plot["name"], plot["width_ft"], plot["length_ft"]) == ("Back Field", 40, 60)
 
 
 def test_land_plots_ordered_by_name():
@@ -351,7 +351,7 @@ def test_update_land_plot_changes_dimensions():
     plot_id = db.list_land_plots()[0]["id"]
     db.update_land_plot(plot_id, "Back Field", 50, 70)
     plot = db.get_land_plot(plot_id)
-    assert (plot["width_ft"], plot["height_ft"]) == (50, 70)
+    assert (plot["width_ft"], plot["length_ft"]) == (50, 70)
 
 
 def test_delete_land_plot_removes_it():
@@ -374,8 +374,8 @@ def test_delete_nonexistent_land_plot_is_a_noop():
     assert db.list_land_plots() == []
 
 
-def _add_plot(name="Back Field", width_ft=40, height_ft=60):
-    db.add_land_plot(name, width_ft, height_ft)
+def _add_plot(name="Back Field", width_ft=40, length_ft=60):
+    db.add_land_plot(name, width_ft, length_ft)
     return db.list_land_plots()[0]["id"]
 
 
@@ -388,7 +388,7 @@ def test_add_bed_persists_label_and_dimensions():
     plot_id = _add_plot()
     db.add_bed(plot_id, "Bed 1", 4, 8)
     bed = db.list_beds_for_plot(plot_id)[0]
-    assert (bed["label"], bed["width_ft"], bed["height_ft"]) == ("Bed 1", 4, 8)
+    assert (bed["label"], bed["width_ft"], bed["length_ft"]) == ("Bed 1", 4, 8)
 
 
 def test_add_bed_starts_unplaced():
@@ -456,7 +456,7 @@ def test_update_bed_size_persists_dimensions():
     bed_id = db.list_beds_for_plot(plot_id)[0]["id"]
     db.update_bed_size(bed_id, 6, 10)
     bed = db.get_bed(bed_id)
-    assert (bed["width_ft"], bed["height_ft"]) == (6, 10)
+    assert (bed["width_ft"], bed["length_ft"]) == (6, 10)
 
 
 def test_delete_bed_removes_it():

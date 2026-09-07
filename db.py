@@ -71,7 +71,7 @@ SCHEMA_STATEMENTS = [
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT NOT NULL,
         width_ft INTEGER NOT NULL,
-        height_ft INTEGER NOT NULL,
+        length_ft INTEGER NOT NULL,
         created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
     )
     """,
@@ -83,7 +83,7 @@ SCHEMA_STATEMENTS = [
         x INTEGER,
         y INTEGER,
         width_ft INTEGER NOT NULL,
-        height_ft INTEGER NOT NULL,
+        length_ft INTEGER NOT NULL,
         rotation_deg INTEGER NOT NULL DEFAULT 0,
         sun_exposure TEXT,
         irrigation_zone TEXT,
@@ -109,10 +109,10 @@ _PLANTING_COLUMNS = (
     "id, variety_id, bed_id, location, planted_date, quantity, quantity_germinated, notes, created_at"
 )
 
-_LAND_PLOT_COLUMNS = "id, name, width_ft, height_ft, created_at"
+_LAND_PLOT_COLUMNS = "id, name, width_ft, length_ft, created_at"
 
 _BED_COLUMNS = (
-    "id, plot_id, label, x, y, width_ft, height_ft, rotation_deg, sun_exposure, irrigation_zone, created_at"
+    "id, plot_id, label, x, y, width_ft, length_ft, rotation_deg, sun_exposure, irrigation_zone, created_at"
 )
 
 
@@ -475,21 +475,21 @@ class Database:
                 {"id": plot_id},
             ).mappings().first()
 
-    def add_land_plot(self, name: str, width_ft: int, height_ft: int):
+    def add_land_plot(self, name: str, width_ft: int, length_ft: int):
         with self.engine.begin() as db_connection:
             db_connection.execute(
-                text("INSERT INTO land_plots (name, width_ft, height_ft) VALUES (:name, :width_ft, :height_ft)"),
-                {"name": name, "width_ft": width_ft, "height_ft": height_ft},
+                text("INSERT INTO land_plots (name, width_ft, length_ft) VALUES (:name, :width_ft, :length_ft)"),
+                {"name": name, "width_ft": width_ft, "length_ft": length_ft},
             )
 
-    def update_land_plot(self, plot_id: int, name: str, width_ft: int, height_ft: int):
+    def update_land_plot(self, plot_id: int, name: str, width_ft: int, length_ft: int):
         with self.engine.begin() as db_connection:
             db_connection.execute(
                 text(
-                    "UPDATE land_plots SET name = :name, width_ft = :width_ft, height_ft = :height_ft "
+                    "UPDATE land_plots SET name = :name, width_ft = :width_ft, length_ft = :length_ft "
                     "WHERE id = :id"
                 ),
-                {"id": plot_id, "name": name, "width_ft": width_ft, "height_ft": height_ft},
+                {"id": plot_id, "name": name, "width_ft": width_ft, "length_ft": length_ft},
             )
 
     def delete_land_plot(self, plot_id: int):
@@ -516,7 +516,7 @@ class Database:
         plot_id: int,
         label: str,
         width_ft: int,
-        height_ft: int,
+        length_ft: int,
         sun_exposure: str = None,
         irrigation_zone: str = None,
     ):
@@ -524,11 +524,11 @@ class Database:
         with self.engine.begin() as db_connection:
             db_connection.execute(
                 text(
-                    "INSERT INTO beds (plot_id, label, width_ft, height_ft, sun_exposure, irrigation_zone) "
-                    "VALUES (:plot_id, :label, :width_ft, :height_ft, :sun_exposure, :irrigation_zone)"
+                    "INSERT INTO beds (plot_id, label, width_ft, length_ft, sun_exposure, irrigation_zone) "
+                    "VALUES (:plot_id, :label, :width_ft, :length_ft, :sun_exposure, :irrigation_zone)"
                 ),
                 {
-                    "plot_id": plot_id, "label": label, "width_ft": width_ft, "height_ft": height_ft,
+                    "plot_id": plot_id, "label": label, "width_ft": width_ft, "length_ft": length_ft,
                     "sun_exposure": sun_exposure or None, "irrigation_zone": irrigation_zone or None,
                 },
             )
@@ -538,7 +538,7 @@ class Database:
         bed_id: int,
         label: str,
         width_ft: int,
-        height_ft: int,
+        length_ft: int,
         rotation_deg: int,
         sun_exposure: str = None,
         irrigation_zone: str = None,
@@ -547,12 +547,12 @@ class Database:
         with self.engine.begin() as db_connection:
             db_connection.execute(
                 text(
-                    "UPDATE beds SET label = :label, width_ft = :width_ft, height_ft = :height_ft, "
+                    "UPDATE beds SET label = :label, width_ft = :width_ft, length_ft = :length_ft, "
                     "rotation_deg = :rotation_deg, sun_exposure = :sun_exposure, irrigation_zone = :irrigation_zone "
                     "WHERE id = :id"
                 ),
                 {
-                    "id": bed_id, "label": label, "width_ft": width_ft, "height_ft": height_ft,
+                    "id": bed_id, "label": label, "width_ft": width_ft, "length_ft": length_ft,
                     "rotation_deg": rotation_deg, "sun_exposure": sun_exposure or None,
                     "irrigation_zone": irrigation_zone or None,
                 },
@@ -564,11 +564,11 @@ class Database:
                 text("UPDATE beds SET x = :x, y = :y WHERE id = :id"), {"id": bed_id, "x": x, "y": y}
             )
 
-    def update_bed_size(self, bed_id: int, width_ft: int, height_ft: int):
+    def update_bed_size(self, bed_id: int, width_ft: int, length_ft: int):
         with self.engine.begin() as db_connection:
             db_connection.execute(
-                text("UPDATE beds SET width_ft = :width_ft, height_ft = :height_ft WHERE id = :id"),
-                {"id": bed_id, "width_ft": width_ft, "height_ft": height_ft},
+                text("UPDATE beds SET width_ft = :width_ft, length_ft = :length_ft WHERE id = :id"),
+                {"id": bed_id, "width_ft": width_ft, "length_ft": length_ft},
             )
 
     def delete_bed(self, bed_id: int):
