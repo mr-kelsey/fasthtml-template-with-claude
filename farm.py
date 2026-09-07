@@ -1,5 +1,7 @@
 """Shared helpers for the farm-planning pages (plants.py, seed_varieties.py, plantings.py)."""
 
+from datetime import date, timedelta
+
 AGRONOMIC_FIELD_LABELS = {
     "germination_days_min": "Germination days (min)",
     "germination_days_max": "Germination days (max)",
@@ -51,6 +53,14 @@ def parse_agronomic_fields(
             return None, f"{AGRONOMIC_FIELD_LABELS[field_name]} must be a number."
         parsed[field_name] = parsed_value
     return parsed, None
+
+
+def compute_window(planted_date: str, days_min: int, days_max: int):
+    "The (start, end) date range a milestone is expected to land in, or None when the days aren't known."
+    if days_min is None or days_max is None:
+        return None
+    planted = date.fromisoformat(planted_date)
+    return planted + timedelta(days=days_min), planted + timedelta(days=days_max)
 
 
 def format_day_range(days_min: int, days_max: int):

@@ -146,7 +146,7 @@ def _add_bed_form(plot_id):
 
 def _unplaced_bed_item(bed):
     return fast.Li(
-        f"{bed['label']} ({bed['width_ft']} x {bed['length_ft']} ft)",
+        fast.A(f"{bed['label']} ({bed['width_ft']} x {bed['length_ft']} ft)", href=f"/beds/{bed['id']}"),
         fast.Form(
             fast.Button("Add to map", type="submit"), method="post", action=f"/beds/{bed['id']}/place"
         ),
@@ -165,6 +165,7 @@ def _label_font_size(width_ft, length_ft, label):
 
 
 def _bed_group(bed):
+    "Clicking (not dragging) a bed navigates to its detail page, where plantings and bed metadata are managed."
     x, y = bed["x"], bed["y"]
     center_x, center_y = bed["width_ft"] / 2, bed["length_ft"] / 2
     font_size = _label_font_size(bed["width_ft"], bed["length_ft"], bed["label"])
@@ -179,10 +180,7 @@ def _bed_group(bed):
         id=f"bed-{bed['id']}",
         cls="bed-group",
         transform=f"translate({x},{y}) rotate({bed['rotation_deg']},{center_x},{center_y})",
-        hx_get=f"/beds/{bed['id']}/edit-fragment",
-        hx_target="#bed-dialog-body",
-        hx_trigger="click",
-        hx_on__after_request="document.getElementById('bed-dialog').showModal()",
+        onclick=f"window.location.href='/beds/{bed['id']}'",
     )
 
 
@@ -229,7 +227,6 @@ def land_plot_map_page(plot_id: int):
         fast.H1(f"{plot['name']} ({plot['width_ft']} x {plot['length_ft']} ft)"),
         fast.A("All plots", href="/land-plots"),
         fast.Div(canvas_wrap, sidebar, cls="land-map-layout"),
-        fast.Dialog(fast.Div(id="bed-dialog-body"), id="bed-dialog"),
         fast.Script(src="/land-map.js"),
     )
 
@@ -399,7 +396,7 @@ def update_bed_route(
         bed_id, label, width_ft, length_ft, rotation_deg or 0,
         sun_exposure=sun_exposure.strip() or None, irrigation_zone=irrigation_zone.strip() or None,
     )
-    return fast.Redirect(f"/land-plots/{bed['plot_id']}/map")
+    return fast.Redirect(f"/beds/{bed_id}")
 
 
 @router("/beds/{bed_id}/delete", methods=["post"])
@@ -409,3 +406,56 @@ def delete_bed_route(bed_id: int):
         return fast.Redirect("/land-plots")
     db.delete_bed(bed_id)
     return fast.Redirect(f"/land-plots/{bed['plot_id']}/map")
+
+
+def _bed_cell(bed_id, plantings_here, x, y):
+    "A cell can hold more than one planting (interplanting) -- its label lists every occupant."
+    occupied = bool(plantings_here)
+    label = ", ".join(f"{p['common_name']} - {p['variety_name']}" for p in plantings_here) if occupied else "+"
+    classes = "bed-cell occupied" if occupied else "bed-cell"
+    return fast.Div(
+        label,
+        cls=classes,
+        hx_get=f"/beds/{bed_id}/cells/{x}/{y}/edit-fragment",
+        hx_target="#cell-dialog-body",
+        hx_trigger="click",
+        hx_on__after_request="document.getElementById('cell-dialog').showModal()",
+    )
+
+
+@router("/beds/{bed_id}", methods=["get"])
+def bed_detail_page(bed_id: int):
+    bed = db.get_bed(bed_id)
+    if bed is None:
+        return fast.Response("Bed not found.", status_code=404)
+    plantings = db.list_plantings_for_bed(bed_id)
+    by_cell = {}
+    for p in plantings:
+        if p["cell_x"] is not None:
+            by_cell.setdefault((p["cell_x"], p["cell_y"]), []).append(p)
+    grid = fast.Div(
+        *[
+            _bed_cell(bed_id, by_cell.get((x, y), []), x, y)
+            for y in range(bed["length_ft"])
+            for x in range(bed["width_ft"])
+        ],
+        cls="bed-grid",
+        style=f"grid-template-columns: repeat({bed['width_ft']}, 1fr);",
+    )
+    edit_bed_button = fast.Button(
+        "Edit bed",
+        type="button",
+        hx_get=f"/beds/{bed_id}/edit-fragment",
+        hx_target="#bed-dialog-body",
+        hx_trigger="click",
+        hx_on__after_request="document.getElementById('bed-dialog').showModal()",
+    )
+    return layout(
+        f"{bed['label']} Detail",
+        fast.H1(f"{bed['label']} ({bed['width_ft']} x {bed['length_ft']} ft)"),
+        fast.A("Back to plot map", href=f"/land-plots/{bed['plot_id']}/map"),
+        edit_bed_button,
+        grid,
+        fast.Dialog(fast.Div(id="cell-dialog-body"), id="cell-dialog"),
+        fast.Dialog(fast.Div(id="bed-dialog-body"), id="bed-dialog"),
+    )

@@ -1,6 +1,10 @@
+from datetime import date, timedelta
+
 from dotenv import dotenv_values
 
 import db
+
+ALL_TIME = ("2000-01-01", "2100-01-01")
 
 
 def test_app_and_test_env_files_configure_different_db_paths():
@@ -470,3 +474,270 @@ def test_delete_bed_removes_it():
 def test_delete_nonexistent_bed_is_a_noop():
     db.delete_bed(999999)
     assert db.list_beds_for_plot(999999) == []
+
+
+def _add_bed(plot_id=None, width_ft=4, length_ft=8, label="Bed 1"):
+    plot_id = plot_id or _add_plot()
+    db.add_bed(plot_id, label, width_ft, length_ft)
+    return db.list_beds_for_plot(plot_id)[0]["id"]
+
+
+def test_list_farm_events_in_range_returns_empty_list_when_none_exist():
+    assert db.list_farm_events_in_range(*ALL_TIME) == []
+
+
+def test_add_farm_event_persists_type_title_and_dates():
+    db.add_farm_event("custom", "Check frost cloth", "2026-03-01", "2026-03-02")
+    event = db.list_farm_events_in_range(*ALL_TIME)[0]
+    assert (event["event_type"], event["title"], event["start_date"], event["end_date"]) == (
+        "custom", "Check frost cloth", "2026-03-01", "2026-03-02",
+    )
+
+
+def test_list_farm_events_in_range_excludes_event_outside_range():
+    db.add_farm_event("custom", "Out of range", "2026-01-01", "2026-01-01")
+    assert db.list_farm_events_in_range("2026-06-01", "2026-06-30") == []
+
+
+def test_farm_events_ordered_by_start_date():
+    db.add_farm_event("custom", "Later", "2026-06-01", "2026-06-01")
+    db.add_farm_event("custom", "Earlier", "2026-01-01", "2026-01-01")
+    assert [e["title"] for e in db.list_farm_events_in_range(*ALL_TIME)] == ["Earlier", "Later"]
+
+
+def test_get_farm_event_returns_matching_row():
+    db.add_farm_event("custom", "Check frost cloth", "2026-03-01", "2026-03-01")
+    event_id = db.list_farm_events_in_range(*ALL_TIME)[0]["id"]
+    assert db.get_farm_event(event_id)["title"] == "Check frost cloth"
+
+
+def test_get_farm_event_returns_none_when_not_found():
+    assert db.get_farm_event(999999) is None
+
+
+def test_delete_farm_event_removes_it():
+    db.add_farm_event("custom", "To delete", "2026-03-01", "2026-03-01")
+    event_id = db.list_farm_events_in_range(*ALL_TIME)[0]["id"]
+    db.delete_farm_event(event_id)
+    assert db.list_farm_events_in_range(*ALL_TIME) == []
+
+
+def test_delete_nonexistent_farm_event_is_a_noop():
+    db.delete_farm_event(999999)
+    assert db.list_farm_events_in_range(*ALL_TIME) == []
+
+
+def test_manual_farm_event_has_no_linked_variety_or_bed():
+    db.add_farm_event("custom", "Check frost cloth", "2026-03-01", "2026-03-01")
+    event = db.list_farm_events_in_range(*ALL_TIME)[0]
+    assert (event["variety_name"], event["bed_label"]) == (None, None)
+
+
+def test_add_planting_without_bed_generates_germination_and_harvest_events():
+    variety_id = _add_variety(
+        germination_days_min=5, germination_days_max=10, days_to_maturity_min=60, days_to_maturity_max=70
+    )
+    db.add_planting(variety_id, "2026-05-01")
+    events = db.list_farm_events_in_range(*ALL_TIME)
+    assert sorted(e["event_type"] for e in events) == ["germination-check", "harvest"]
+
+
+def test_generated_germination_event_uses_variety_day_range():
+    variety_id = _add_variety(germination_days_min=5, germination_days_max=10)
+    db.add_planting(variety_id, "2026-05-01")
+    germination = db.list_farm_events_in_range(*ALL_TIME)[0]
+    planted = date(2026, 5, 1)
+    assert (germination["start_date"], germination["end_date"]) == (
+        (planted + timedelta(days=5)).isoformat(), (planted + timedelta(days=10)).isoformat(),
+    )
+
+
+def test_generated_harvest_event_uses_variety_day_range():
+    variety_id = _add_variety(days_to_maturity_min=60, days_to_maturity_max=70)
+    db.add_planting(variety_id, "2026-05-01")
+    harvest = db.list_farm_events_in_range(*ALL_TIME)[0]
+    planted = date(2026, 5, 1)
+    assert (harvest["start_date"], harvest["end_date"]) == (
+        (planted + timedelta(days=60)).isoformat(), (planted + timedelta(days=70)).isoformat(),
+    )
+
+
+def test_generated_farm_event_includes_variety_name_from_join():
+    variety_id = _add_variety(
+        common_name="Tomato", variety_name="Cherokee Purple", days_to_maturity_min=60, days_to_maturity_max=70
+    )
+    db.add_planting(variety_id, "2026-05-01")
+    event = db.list_farm_events_in_range(*ALL_TIME)[0]
+    assert event["variety_name"] == "Cherokee Purple"
+
+
+def test_generated_farm_event_includes_bed_label_from_join():
+    variety_id = _add_variety(days_to_maturity_min=60, days_to_maturity_max=70)
+    bed_id = _add_bed(label="Tomato Bed")
+    db.add_planting(variety_id, "2026-05-01", bed_id=bed_id, cell_x=0, cell_y=0)
+    event = db.list_farm_events_in_range(*ALL_TIME)[0]
+    assert event["bed_label"] == "Tomato Bed"
+
+
+def test_add_planting_skips_germination_event_when_variety_lacks_germination_days():
+    variety_id = _add_variety(days_to_maturity_min=60, days_to_maturity_max=70)
+    db.add_planting(variety_id, "2026-05-01")
+    assert [e["event_type"] for e in db.list_farm_events_in_range(*ALL_TIME)] == ["harvest"]
+
+
+def test_add_planting_skips_harvest_event_when_variety_lacks_maturity_days():
+    variety_id = _add_variety(germination_days_min=5, germination_days_max=10)
+    db.add_planting(variety_id, "2026-05-01")
+    assert [e["event_type"] for e in db.list_farm_events_in_range(*ALL_TIME)] == ["germination-check"]
+
+
+def test_update_planting_regenerates_events_instead_of_duplicating():
+    variety_id = _add_variety(days_to_maturity_min=60, days_to_maturity_max=70)
+    planting_id = db.add_planting(variety_id, "2026-05-01")
+    db.update_planting(planting_id, variety_id, "2026-06-01")
+    assert len(db.list_farm_events_in_range(*ALL_TIME)) == 1
+
+
+def test_update_planting_shifts_generated_event_dates():
+    variety_id = _add_variety(days_to_maturity_min=60, days_to_maturity_max=70)
+    planting_id = db.add_planting(variety_id, "2026-05-01")
+    db.update_planting(planting_id, variety_id, "2026-06-01")
+    harvest = db.list_farm_events_in_range(*ALL_TIME)[0]
+    planted = date(2026, 6, 1)
+    assert (harvest["start_date"], harvest["end_date"]) == (
+        (planted + timedelta(days=60)).isoformat(), (planted + timedelta(days=70)).isoformat(),
+    )
+
+
+def test_delete_planting_removes_its_generated_events():
+    variety_id = _add_variety(days_to_maturity_min=60, days_to_maturity_max=70)
+    planting_id = db.add_planting(variety_id, "2026-05-01")
+    db.delete_planting(planting_id)
+    assert db.list_farm_events_in_range(*ALL_TIME) == []
+
+
+def test_two_adjacent_same_variety_same_date_cells_produce_one_event_pair():
+    variety_id = _add_variety(
+        germination_days_min=5, germination_days_max=10, days_to_maturity_min=60, days_to_maturity_max=70
+    )
+    bed_id = _add_bed()
+    db.add_planting(variety_id, "2026-05-01", bed_id=bed_id, cell_x=0, cell_y=0)
+    db.add_planting(variety_id, "2026-05-01", bed_id=bed_id, cell_x=1, cell_y=0)
+    events = db.list_farm_events_in_range(*ALL_TIME)
+    assert sorted(e["event_type"] for e in events) == ["germination-check", "harvest"]
+
+
+def test_merged_group_event_links_to_lowest_planting_id_in_the_group():
+    variety_id = _add_variety(days_to_maturity_min=60, days_to_maturity_max=70)
+    bed_id = _add_bed()
+    first_id = db.add_planting(variety_id, "2026-05-01", bed_id=bed_id, cell_x=0, cell_y=0)
+    db.add_planting(variety_id, "2026-05-01", bed_id=bed_id, cell_x=1, cell_y=0)
+    event = db.list_farm_events_in_range(*ALL_TIME)[0]
+    assert event["linked_planting_id"] == first_id
+
+
+def test_two_diagonal_cells_do_not_merge():
+    variety_id = _add_variety(days_to_maturity_min=60, days_to_maturity_max=70)
+    bed_id = _add_bed()
+    db.add_planting(variety_id, "2026-05-01", bed_id=bed_id, cell_x=0, cell_y=0)
+    db.add_planting(variety_id, "2026-05-01", bed_id=bed_id, cell_x=1, cell_y=1)
+    assert len(db.list_farm_events_in_range(*ALL_TIME)) == 2
+
+
+def test_two_adjacent_cells_with_different_planted_dates_do_not_merge():
+    variety_id = _add_variety(days_to_maturity_min=60, days_to_maturity_max=70)
+    bed_id = _add_bed()
+    db.add_planting(variety_id, "2026-05-01", bed_id=bed_id, cell_x=0, cell_y=0)
+    db.add_planting(variety_id, "2026-05-15", bed_id=bed_id, cell_x=1, cell_y=0)
+    assert len(db.list_farm_events_in_range(*ALL_TIME)) == 2
+
+
+def test_two_adjacent_cells_with_different_varieties_do_not_merge():
+    variety_a = _add_variety(
+        common_name="Tomato", variety_name="Cherokee Purple", days_to_maturity_min=60, days_to_maturity_max=70
+    )
+    variety_b = _add_variety(
+        common_name="Pepper", variety_name="Bell", days_to_maturity_min=60, days_to_maturity_max=70
+    )
+    bed_id = _add_bed()
+    db.add_planting(variety_a, "2026-05-01", bed_id=bed_id, cell_x=0, cell_y=0)
+    db.add_planting(variety_b, "2026-05-01", bed_id=bed_id, cell_x=1, cell_y=0)
+    assert len(db.list_farm_events_in_range(*ALL_TIME)) == 2
+
+
+def test_three_contiguous_cells_produce_one_event_before_clearing_middle():
+    variety_id = _add_variety(days_to_maturity_min=60, days_to_maturity_max=70)
+    bed_id = _add_bed()
+    db.add_planting(variety_id, "2026-05-01", bed_id=bed_id, cell_x=0, cell_y=0)
+    db.add_planting(variety_id, "2026-05-01", bed_id=bed_id, cell_x=1, cell_y=0)
+    db.add_planting(variety_id, "2026-05-01", bed_id=bed_id, cell_x=2, cell_y=0)
+    assert len(db.list_farm_events_in_range(*ALL_TIME)) == 1
+
+
+def test_clearing_middle_cell_splits_merged_group_into_two():
+    variety_id = _add_variety(days_to_maturity_min=60, days_to_maturity_max=70)
+    bed_id = _add_bed()
+    db.add_planting(variety_id, "2026-05-01", bed_id=bed_id, cell_x=0, cell_y=0)
+    middle_id = db.add_planting(variety_id, "2026-05-01", bed_id=bed_id, cell_x=1, cell_y=0)
+    db.add_planting(variety_id, "2026-05-01", bed_id=bed_id, cell_x=2, cell_y=0)
+    db.delete_planting(middle_id)
+    assert len(db.list_farm_events_in_range(*ALL_TIME)) == 2
+
+
+def test_list_plantings_for_bed_returns_empty_list_when_none_exist():
+    bed_id = _add_bed()
+    assert db.list_plantings_for_bed(bed_id) == []
+
+
+def test_list_plantings_for_bed_includes_cell_coordinates():
+    variety_id = _add_variety()
+    bed_id = _add_bed()
+    db.add_planting(variety_id, "2026-05-01", bed_id=bed_id, cell_x=2, cell_y=3)
+    planting = db.list_plantings_for_bed(bed_id)[0]
+    assert (planting["cell_x"], planting["cell_y"]) == (2, 3)
+
+
+def test_list_plantings_for_bed_excludes_plantings_in_other_beds():
+    variety_id = _add_variety()
+    db.add_land_plot("Plot A", 40, 60)
+    db.add_land_plot("Plot B", 40, 60)
+    plots_by_name = {p["name"]: p["id"] for p in db.list_land_plots()}
+    bed_id = _add_bed(plot_id=plots_by_name["Plot A"])
+    other_bed_id = _add_bed(plot_id=plots_by_name["Plot B"], label="Bed 2")
+    db.add_planting(variety_id, "2026-05-01", bed_id=other_bed_id, cell_x=0, cell_y=0)
+    assert db.list_plantings_for_bed(bed_id) == []
+
+
+def test_list_plantings_at_cell_returns_matching_planting():
+    variety_id = _add_variety()
+    bed_id = _add_bed()
+    planting_id = db.add_planting(variety_id, "2026-05-01", bed_id=bed_id, cell_x=1, cell_y=2)
+    assert db.list_plantings_at_cell(bed_id, 1, 2)[0]["id"] == planting_id
+
+
+def test_list_plantings_at_cell_returns_empty_list_when_empty():
+    bed_id = _add_bed()
+    assert db.list_plantings_at_cell(bed_id, 1, 2) == []
+
+
+def test_list_plantings_at_cell_returns_multiple_interplanted_varieties():
+    "A cell can hold more than one planting -- e.g. interplanting carrots and tomatoes in the same square."
+    variety_a = _add_variety(common_name="Tomato", variety_name="Cherokee Purple")
+    variety_b = _add_variety(common_name="Carrot", variety_name="Danvers")
+    bed_id = _add_bed()
+    db.add_planting(variety_a, "2026-05-01", bed_id=bed_id, cell_x=0, cell_y=0)
+    db.add_planting(variety_b, "2026-05-01", bed_id=bed_id, cell_x=0, cell_y=0)
+    assert len(db.list_plantings_at_cell(bed_id, 0, 0)) == 2
+
+
+def test_interplanted_cell_generates_separate_events_per_variety():
+    variety_a = _add_variety(
+        common_name="Tomato", variety_name="Cherokee Purple", days_to_maturity_min=60, days_to_maturity_max=70
+    )
+    variety_b = _add_variety(
+        common_name="Carrot", variety_name="Danvers", days_to_maturity_min=60, days_to_maturity_max=70
+    )
+    bed_id = _add_bed()
+    db.add_planting(variety_a, "2026-05-01", bed_id=bed_id, cell_x=0, cell_y=0)
+    db.add_planting(variety_b, "2026-05-01", bed_id=bed_id, cell_x=0, cell_y=0)
+    assert len(db.list_farm_events_in_range(*ALL_TIME)) == 2

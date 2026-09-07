@@ -892,6 +892,21 @@ def test_add_bed_starts_unplaced_on_map_page(client):
     assert "Bed 1" in response.text
 
 
+def test_unplaced_bed_links_to_its_detail_page(client):
+    plot_id = _create_plot(client)
+    bed_id = _create_bed(client, plot_id)
+    response = client.get(f"/land-plots/{plot_id}/map")
+    assert f'href="/beds/{bed_id}"' in response.text
+
+
+def test_placed_bed_on_map_links_to_its_detail_page(client):
+    plot_id = _create_plot(client)
+    bed_id = _create_bed(client, plot_id)
+    client.post(f"/beds/{bed_id}/position", data={"x": "0", "y": "0"})
+    response = client.get(f"/land-plots/{plot_id}/map")
+    assert f"/beds/{bed_id}" in response.text
+
+
 def test_add_bed_rejects_blank_label(client):
     plot_id = _create_plot(client)
     response = client.post(f"/land-plots/{plot_id}/beds", data={"label": "", "width_ft": "4", "length_ft": "8"})
@@ -1047,7 +1062,7 @@ def test_edit_bed_updates_label(client):
     assert db.get_bed(bed_id)["label"] == "Updated Bed"
 
 
-def test_edit_bed_redirects_to_plot_map(client):
+def test_edit_bed_redirects_to_bed_detail(client):
     plot_id = _create_plot(client)
     bed_id = _create_bed(client, plot_id)
     response = client.post(
@@ -1055,7 +1070,7 @@ def test_edit_bed_redirects_to_plot_map(client):
         data={"label": "Bed 1", "width_ft": "4", "length_ft": "8", "rotation_deg": "0"},
         follow_redirects=False,
     )
-    assert response.headers["location"] == f"/land-plots/{plot_id}/map"
+    assert response.headers["location"] == f"/beds/{bed_id}"
 
 
 def test_edit_bed_rejects_rotation_above_359(client):
@@ -1090,3 +1105,255 @@ def test_delete_bed_redirects_to_plot_map(client):
     bed_id = _create_bed(client, plot_id)
     response = client.post(f"/beds/{bed_id}/delete", follow_redirects=False)
     assert response.headers["location"] == f"/land-plots/{plot_id}/map"
+
+
+def test_bed_detail_page_returns_200(client):
+    plot_id = _create_plot(client)
+    bed_id = _create_bed(client, plot_id)
+    response = client.get(f"/beds/{bed_id}")
+    assert response.status_code == 200
+
+
+def test_bed_detail_page_returns_404_when_not_found(client):
+    response = client.get("/beds/999999")
+    assert response.status_code == 404
+
+
+def test_bed_detail_page_shows_bed_label(client):
+    plot_id = _create_plot(client)
+    bed_id = _create_bed(client, plot_id, label="Tomato Bed")
+    response = client.get(f"/beds/{bed_id}")
+    assert "Tomato Bed" in response.text
+
+
+def test_bed_detail_page_renders_one_cell_per_square_foot(client):
+    plot_id = _create_plot(client)
+    bed_id = _create_bed(client, plot_id, width_ft="2", length_ft="3")
+    response = client.get(f"/beds/{bed_id}")
+    assert response.text.count("bed-cell") == 6
+
+
+def test_assign_cell_redirects_with_303(client):
+    plot_id = _create_plot(client)
+    bed_id = _create_bed(client, plot_id)
+    variety_id = _create_variety(client)
+    response = client.post(
+        f"/beds/{bed_id}/cells/0/0",
+        data={"variety_id": str(variety_id), "planted_date": "2026-05-01"},
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+
+
+def test_assign_cell_persists_planting_at_that_cell(client):
+    plot_id = _create_plot(client)
+    bed_id = _create_bed(client, plot_id)
+    variety_id = _create_variety(client)
+    client.post(f"/beds/{bed_id}/cells/1/2", data={"variety_id": str(variety_id), "planted_date": "2026-05-01"})
+    assert db.list_plantings_at_cell(bed_id, 1, 2)[0]["variety_id"] == variety_id
+
+
+def test_assign_cell_shows_variety_on_bed_detail_page(client):
+    plot_id = _create_plot(client)
+    bed_id = _create_bed(client, plot_id)
+    variety_id = _create_variety(client)
+    client.post(f"/beds/{bed_id}/cells/0/0", data={"variety_id": str(variety_id), "planted_date": "2026-05-01"})
+    response = client.get(f"/beds/{bed_id}")
+    assert "Cherokee Purple" in response.text
+
+
+def test_assign_cell_rejects_unknown_variety(client):
+    plot_id = _create_plot(client)
+    bed_id = _create_bed(client, plot_id)
+    response = client.post(f"/beds/{bed_id}/cells/0/0", data={"variety_id": "999999", "planted_date": "2026-05-01"})
+    assert response.status_code == 422
+
+
+def test_assign_cell_rejects_malformed_planted_date(client):
+    plot_id = _create_plot(client)
+    bed_id = _create_bed(client, plot_id)
+    variety_id = _create_variety(client)
+    response = client.post(
+        f"/beds/{bed_id}/cells/0/0", data={"variety_id": str(variety_id), "planted_date": "not-a-date"}
+    )
+    assert response.status_code == 422
+
+
+def test_assign_cell_rejects_coordinate_outside_bed(client):
+    plot_id = _create_plot(client)
+    bed_id = _create_bed(client, plot_id, width_ft="4", length_ft="8")
+    variety_id = _create_variety(client)
+    response = client.post(
+        f"/beds/{bed_id}/cells/10/0", data={"variety_id": str(variety_id), "planted_date": "2026-05-01"}
+    )
+    assert response.status_code == 422
+
+
+def test_assign_cell_returns_404_when_bed_not_found(client):
+    variety_id = _create_variety(client)
+    response = client.post(
+        "/beds/999999/cells/0/0", data={"variety_id": str(variety_id), "planted_date": "2026-05-01"}
+    )
+    assert response.status_code == 404
+
+
+def test_assigning_a_second_variety_to_an_occupied_cell_keeps_both(client):
+    "Interplanting -- a cell can hold more than one type of plant."
+    plot_id = _create_plot(client)
+    bed_id = _create_bed(client, plot_id)
+    variety_a = _create_variety(client, common_name="Tomato", variety_name="Cherokee Purple")
+    variety_b = _create_variety(client, common_name="Carrot", variety_name="Danvers")
+    client.post(f"/beds/{bed_id}/cells/0/0", data={"variety_id": str(variety_a), "planted_date": "2026-05-01"})
+    client.post(f"/beds/{bed_id}/cells/0/0", data={"variety_id": str(variety_b), "planted_date": "2026-05-01"})
+    assert len(db.list_plantings_at_cell(bed_id, 0, 0)) == 2
+
+
+def test_bed_detail_page_shows_both_interplanted_varieties(client):
+    plot_id = _create_plot(client)
+    bed_id = _create_bed(client, plot_id)
+    variety_a = _create_variety(client, common_name="Tomato", variety_name="Cherokee Purple")
+    variety_b = _create_variety(client, common_name="Carrot", variety_name="Danvers")
+    client.post(f"/beds/{bed_id}/cells/0/0", data={"variety_id": str(variety_a), "planted_date": "2026-05-01"})
+    client.post(f"/beds/{bed_id}/cells/0/0", data={"variety_id": str(variety_b), "planted_date": "2026-05-01"})
+    response = client.get(f"/beds/{bed_id}")
+    assert "Cherokee Purple" in response.text and "Danvers" in response.text
+
+
+def test_clear_cell_removes_the_planting(client):
+    plot_id = _create_plot(client)
+    bed_id = _create_bed(client, plot_id)
+    variety_id = _create_variety(client)
+    client.post(f"/beds/{bed_id}/cells/0/0", data={"variety_id": str(variety_id), "planted_date": "2026-05-01"})
+    client.post(f"/beds/{bed_id}/cells/0/0/clear")
+    assert db.list_plantings_at_cell(bed_id, 0, 0) == []
+
+
+def test_clear_cell_removes_every_interplanted_variety(client):
+    plot_id = _create_plot(client)
+    bed_id = _create_bed(client, plot_id)
+    variety_a = _create_variety(client, common_name="Tomato", variety_name="Cherokee Purple")
+    variety_b = _create_variety(client, common_name="Carrot", variety_name="Danvers")
+    client.post(f"/beds/{bed_id}/cells/0/0", data={"variety_id": str(variety_a), "planted_date": "2026-05-01"})
+    client.post(f"/beds/{bed_id}/cells/0/0", data={"variety_id": str(variety_b), "planted_date": "2026-05-01"})
+    client.post(f"/beds/{bed_id}/cells/0/0/clear")
+    assert db.list_plantings_at_cell(bed_id, 0, 0) == []
+
+
+def test_clear_empty_cell_is_a_noop(client):
+    plot_id = _create_plot(client)
+    bed_id = _create_bed(client, plot_id)
+    response = client.post(f"/beds/{bed_id}/cells/0/0/clear")
+    assert response.status_code == 200
+
+
+def test_cell_edit_fragment_lists_existing_planting_for_occupied_cell(client):
+    plot_id = _create_plot(client)
+    bed_id = _create_bed(client, plot_id)
+    variety_id = _create_variety(client)
+    client.post(f"/beds/{bed_id}/cells/0/0", data={"variety_id": str(variety_id), "planted_date": "2026-05-01"})
+    response = client.get(f"/beds/{bed_id}/cells/0/0/edit-fragment")
+    assert "Cherokee Purple" in response.text
+
+
+def test_cell_edit_fragment_returns_200_for_empty_cell(client):
+    plot_id = _create_plot(client)
+    bed_id = _create_bed(client, plot_id)
+    response = client.get(f"/beds/{bed_id}/cells/0/0/edit-fragment")
+    assert response.status_code == 200
+
+
+def test_editing_bed_scoped_planting_redirects_to_bed_detail(client):
+    plot_id = _create_plot(client)
+    bed_id = _create_bed(client, plot_id)
+    variety_id = _create_variety(client)
+    client.post(f"/beds/{bed_id}/cells/0/0", data={"variety_id": str(variety_id), "planted_date": "2026-05-01"})
+    planting_id = db.list_plantings_at_cell(bed_id, 0, 0)[0]["id"]
+    response = client.post(
+        f"/plantings/{planting_id}/edit",
+        data={"variety_id": str(variety_id), "planted_date": "2026-05-01"},
+        follow_redirects=False,
+    )
+    assert response.headers["location"] == f"/beds/{bed_id}"
+
+
+def test_editing_bed_scoped_planting_keeps_its_cell(client):
+    plot_id = _create_plot(client)
+    bed_id = _create_bed(client, plot_id)
+    variety_id = _create_variety(client)
+    client.post(f"/beds/{bed_id}/cells/1/2", data={"variety_id": str(variety_id), "planted_date": "2026-05-01"})
+    planting_id = db.list_plantings_at_cell(bed_id, 1, 2)[0]["id"]
+    client.post(f"/plantings/{planting_id}/edit", data={"variety_id": str(variety_id), "planted_date": "2026-06-01"})
+    assert (db.get_planting(planting_id)["cell_x"], db.get_planting(planting_id)["cell_y"]) == (1, 2)
+
+
+def test_deleting_bed_scoped_planting_redirects_to_bed_detail(client):
+    plot_id = _create_plot(client)
+    bed_id = _create_bed(client, plot_id)
+    variety_id = _create_variety(client)
+    client.post(f"/beds/{bed_id}/cells/0/0", data={"variety_id": str(variety_id), "planted_date": "2026-05-01"})
+    planting_id = db.list_plantings_at_cell(bed_id, 0, 0)[0]["id"]
+    response = client.post(f"/plantings/{planting_id}/delete", follow_redirects=False)
+    assert response.headers["location"] == f"/beds/{bed_id}"
+
+
+def _farm_calendar_url(year, month):
+    return f"/farm-calendar?year={year}&month={month}"
+
+
+def test_farm_calendar_page_returns_200(client):
+    response = client.get("/farm-calendar")
+    assert response.status_code == 200
+
+
+def test_farm_calendar_page_shows_weekday_headers(client):
+    response = client.get("/farm-calendar")
+    assert "Sun" in response.text
+
+
+def test_add_custom_farm_event_appears_on_calendar_grid(client):
+    client.post("/farm-calendar", data={"title": "Check frost cloth", "event_type": "custom", "start_date": "2026-09-10"})
+    response = client.get(_farm_calendar_url(2026, 9))
+    assert "Check frost cloth" in response.text
+
+
+def test_farm_calendar_day_fragment_lists_events_for_that_day(client):
+    client.post("/farm-calendar", data={"title": "Check frost cloth", "event_type": "custom", "start_date": "2026-09-10"})
+    response = client.get("/farm-calendar/day/2026-09-10")
+    assert "Check frost cloth" in response.text
+
+
+def test_generated_farm_event_appears_on_calendar_grid(client):
+    variety_id = _create_variety(client, days_to_maturity_min="60", days_to_maturity_max="70")
+    client.post("/plantings", data={"variety_id": str(variety_id), "planted_date": "2026-05-01"})
+    event = db.list_farm_events_in_range("2000-01-01", "2100-01-01")[0]
+    event_date = date.fromisoformat(event["start_date"])
+    response = client.get(_farm_calendar_url(event_date.year, event_date.month))
+    assert "Cherokee Purple" in response.text
+
+
+def test_delete_custom_farm_event_removes_it(client):
+    client.post("/farm-calendar", data={"title": "To delete", "event_type": "custom", "start_date": "2026-09-10"})
+    event_id = db.list_farm_events_in_range("2000-01-01", "2100-01-01")[0]["id"]
+    client.post(f"/farm-calendar/{event_id}/delete")
+    assert db.list_farm_events_in_range("2000-01-01", "2100-01-01") == []
+
+
+def test_delete_linked_farm_event_is_forbidden(client):
+    variety_id = _create_variety(client, days_to_maturity_min="60", days_to_maturity_max="70")
+    client.post("/plantings", data={"variety_id": str(variety_id), "planted_date": "2026-05-01"})
+    event_id = db.list_farm_events_in_range("2000-01-01", "2100-01-01")[0]["id"]
+    response = client.post(f"/farm-calendar/{event_id}/delete")
+    assert response.status_code == 403
+
+
+def test_delete_linked_farm_event_does_not_remove_it(client):
+    variety_id = _create_variety(client, days_to_maturity_min="60", days_to_maturity_max="70")
+    client.post("/plantings", data={"variety_id": str(variety_id), "planted_date": "2026-05-01"})
+    event_id = db.list_farm_events_in_range("2000-01-01", "2100-01-01")[0]["id"]
+    client.post(f"/farm-calendar/{event_id}/delete")
+    assert db.get_farm_event(event_id) is not None
+
+
+def test_add_custom_farm_event_rejects_blank_title(client):
+    response = client.post("/farm-calendar", data={"title": "", "event_type": "custom", "start_date": "2026-09-10"})
+    assert response.status_code == 422

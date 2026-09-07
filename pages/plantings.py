@@ -1,9 +1,9 @@
-from datetime import date, timedelta
+from datetime import date
 
 from fasthtml import common as fast
 
 from layout import layout
-from farm import parse_optional_int
+from farm import parse_optional_int, compute_window
 import db
 
 router = fast.APIRouter()
@@ -20,14 +20,6 @@ def _parse_date_or_none(value: str):
         return date.fromisoformat(value)
     except (ValueError, TypeError):
         return None
-
-
-def _window(planted_date: str, days_min: int, days_max: int):
-    "The (start, end) date range this planting is expected to hit a milestone, or None when the days aren't known."
-    if days_min is None or days_max is None:
-        return None
-    planted = date.fromisoformat(planted_date)
-    return planted + timedelta(days=days_min), planted + timedelta(days=days_max)
 
 
 def _format_window(window):
@@ -47,11 +39,11 @@ def _overlap_warnings(plantings):
             by_location.setdefault(location, []).append(planting)
     for location, group in by_location.items():
         for i, first in enumerate(group):
-            first_window = _window(first["planted_date"], first["days_to_maturity_min"], first["days_to_maturity_max"])
+            first_window = compute_window(first["planted_date"], first["days_to_maturity_min"], first["days_to_maturity_max"])
             if first_window is None:
                 continue
             for second in group[i + 1 :]:
-                second_window = _window(
+                second_window = compute_window(
                     second["planted_date"], second["days_to_maturity_min"], second["days_to_maturity_max"]
                 )
                 if second_window is None:
@@ -107,8 +99,8 @@ def _planting_form(action, submit_label, varieties, planting=None):
 
 def _planting_row(planting, warnings):
     row_warnings = warnings.get(planting["id"], [])
-    germination_window = _window(planting["planted_date"], planting["germination_days_min"], planting["germination_days_max"])
-    harvest_window = _window(planting["planted_date"], planting["days_to_maturity_min"], planting["days_to_maturity_max"])
+    germination_window = compute_window(planting["planted_date"], planting["germination_days_min"], planting["germination_days_max"])
+    harvest_window = compute_window(planting["planted_date"], planting["days_to_maturity_min"], planting["days_to_maturity_max"])
     return fast.Tr(
         fast.Td(planting["variety_name"] or ""),
         fast.Td(planting["common_name"] or ""),
@@ -241,6 +233,9 @@ def update_planting_route(
     quantity_germinated: str = "",
     notes: str = "",
 ):
+    existing = db.get_planting(planting_id)
+    if existing is None:
+        return fast.Response("Planting not found.", status_code=404)
     validated = _validate_planting_fields(variety_id, planted_date, quantity, quantity_germinated)
     if isinstance(validated, fast.Response):
         return validated
@@ -249,15 +244,128 @@ def update_planting_route(
         planting_id,
         variety_id,
         planted_date,
+        bed_id=existing["bed_id"],
         location=location.strip() or None,
         quantity=quantity,
         quantity_germinated=quantity_germinated,
         notes=notes.strip() or None,
+        cell_x=existing["cell_x"],
+        cell_y=existing["cell_y"],
     )
+    if existing["bed_id"] is not None:
+        return fast.Redirect(f"/beds/{existing['bed_id']}")
     return fast.Redirect("/plantings")
 
 
 @router("/plantings/{planting_id}/delete", methods=["post"])
 def delete_planting_route(planting_id: int):
+    planting = db.get_planting(planting_id)
+    if planting is None:
+        return fast.Redirect("/plantings")
     db.delete_planting(planting_id)
+    if planting["bed_id"] is not None:
+        return fast.Redirect(f"/beds/{planting['bed_id']}")
     return fast.Redirect("/plantings")
+
+
+def _cell_assign_form(bed, x, y, varieties):
+    "Always blank -- adds a new planting to the cell. Editing an existing one goes through /plantings/{id}/edit."
+    return fast.Form(
+        fast.Select(
+            *[
+                fast.Option(f"{variety['common_name']} - {variety['name']}", value=str(variety["id"]))
+                for variety in varieties
+            ],
+            name="variety_id",
+            required=True,
+        ),
+        fast.Input(name="planted_date", type="date", required=True),
+        fast.Input(name="quantity", type="number", placeholder="Quantity"),
+        fast.Input(name="quantity_germinated", type="number", placeholder="Quantity germinated"),
+        fast.Textarea("", name="notes", placeholder="Notes (optional)"),
+        fast.Button("Add", type="submit"),
+        method="post",
+        action=f"/beds/{bed['id']}/cells/{x}/{y}",
+    )
+
+
+def _validate_cell_coordinates(bed, x, y):
+    "Returns an error fast.Response when (x, y) falls outside the bed's own grid, else None."
+    if not (0 <= x < bed["width_ft"]) or not (0 <= y < bed["length_ft"]):
+        return fast.Response("Cell is outside the bed.", status_code=422)
+    return None
+
+
+def _cell_planting_row(planting):
+    return fast.Li(
+        f"{planting['common_name']} - {planting['variety_name']} (planted {planting['planted_date']})",
+        fast.A("Edit", href=f"/plantings/{planting['id']}/edit"),
+        fast.Form(
+            fast.Button("Delete", type="submit"), method="post", action=f"/plantings/{planting['id']}/delete"
+        ),
+    )
+
+
+@router("/beds/{bed_id}/cells/{x}/{y}/edit-fragment", methods=["get"])
+def cell_edit_fragment(bed_id: int, x: int, y: int):
+    "A cell can hold more than one planting (interplanting), so this lists every occupant plus an add form."
+    bed = db.get_bed(bed_id)
+    if bed is None:
+        return fast.Response("Bed not found.", status_code=404)
+    plantings = db.list_plantings_at_cell(bed_id, x, y)
+    clear_form = (
+        fast.Form(
+            fast.Button("Clear cell", type="submit"), method="post", action=f"/beds/{bed_id}/cells/{x}/{y}/clear"
+        ),
+    ) if plantings else ()
+    return (
+        fast.H3(f"Cell ({x}, {y})"),
+        fast.Ul(*[_cell_planting_row(p) for p in plantings]) if plantings else fast.P("Nothing planted here yet."),
+        *clear_form,
+        fast.H4("Add a planting"),
+        _cell_assign_form(bed, x, y, db.list_seed_varieties()),
+        fast.Button("Close", type="button", onclick="document.getElementById('cell-dialog').close()"),
+    )
+
+
+@router("/beds/{bed_id}/cells/{x}/{y}", methods=["post"])
+def assign_cell_route(
+    bed_id: int,
+    x: int,
+    y: int,
+    variety_id: str,
+    planted_date: str,
+    quantity: str = "",
+    quantity_germinated: str = "",
+    notes: str = "",
+):
+    "Adds a planting to this cell -- a cell can hold more than one (e.g. interplanting)."
+    bed = db.get_bed(bed_id)
+    if bed is None:
+        return fast.Response("Bed not found.", status_code=404)
+    coordinate_error = _validate_cell_coordinates(bed, x, y)
+    if coordinate_error is not None:
+        return coordinate_error
+    validated = _validate_planting_fields(variety_id, planted_date, quantity, quantity_germinated)
+    if isinstance(validated, fast.Response):
+        return validated
+    variety_id, planted_date, quantity, quantity_germinated = validated
+    db.add_planting(
+        variety_id,
+        planted_date,
+        bed_id=bed_id,
+        quantity=quantity,
+        quantity_germinated=quantity_germinated,
+        notes=notes.strip() or None,
+        cell_x=x,
+        cell_y=y,
+    )
+    return fast.Redirect(f"/beds/{bed_id}")
+
+
+@router("/beds/{bed_id}/cells/{x}/{y}/clear", methods=["post"])
+def clear_cell_route(bed_id: int, x: int, y: int):
+    "Removes every planting occupying this cell."
+    for planting in db.list_plantings_at_cell(bed_id, x, y):
+        db.delete_planting(planting["id"])
+    return fast.Redirect(f"/beds/{bed_id}")

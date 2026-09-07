@@ -221,3 +221,31 @@ dialog#bed-dialog {
     max-width: 28rem;
     width: 100%;
 }
+
+.bed-grid {
+    display: grid;
+    gap: 2px;
+    max-width: 40rem;
+}
+
+.bed-cell {
+    aspect-ratio: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    font-size: 0.7rem;
+    padding: 0.25rem;
+    border: 1px solid var(--pico-muted-border-color);
+    cursor: pointer;
+}
+
+.bed-cell.occupied {
+    background: var(--pico-primary-background);
+    color: var(--pico-primary-inverse);
+}
+
+dialog#cell-dialog {
+    max-width: 28rem;
+    width: 100%;
+}

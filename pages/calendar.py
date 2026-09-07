@@ -1,16 +1,15 @@
 import calendar as cal
-from datetime import date, timedelta
+from datetime import date
 from urllib.parse import urlencode
 
 from fasthtml import common as fast
 
 from layout import layout
 from family import FAMILY_MEMBERS, get_member
+from calendar_shared import month_grid, events_by_date, month_nav, day_square, calendar_grid
 import db
 
 router = fast.APIRouter()
-
-WEEKDAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
 
 
 def _calendar_url(year, month, member_id=None, base="/calendar"):
@@ -57,22 +56,6 @@ def _validate_event_dates(title, start_date, end_date):
     return title, start_date, end_date, start_date_parsed
 
 
-def _month_grid(year, month):
-    return cal.Calendar(firstweekday=6).monthdatescalendar(year, month)
-
-
-def _events_by_date(events, grid_start, grid_end):
-    by_date = {}
-    for event in events:
-        event_start = max(date.fromisoformat(event["start_date"]), grid_start)
-        event_end = min(date.fromisoformat(event["end_date"]), grid_end)
-        current = event_start
-        while current <= event_end:
-            by_date.setdefault(current, []).append(event)
-            current += timedelta(days=1)
-    return by_date
-
-
 def _recurring_events_by_date(recurring_events, weeks):
     by_date = {}
     for week in weeks:
@@ -96,56 +79,36 @@ def _recurring_label(recurring_event):
     return fast.Div(recurring_event["title"], cls="recurring-label")
 
 
-def _day_square(day_date, events_for_day, recurring_for_day, in_current_month, is_today, year, month, member_id):
-    classes = ["day-square"]
-    if not in_current_month:
-        classes.append("outside-month")
-    if is_today:
-        classes.append("today")
-    if any(event["is_critical"] for event in events_for_day):
-        classes.append("critical-day")
-    return fast.Div(
-        fast.Div(str(day_date.day), cls="day-number"),
+def _family_day_square(day_date, in_current_month, is_today, events_for_day, recurring_for_day, year, month, member_id):
+    badges = [
         fast.Div(*[_event_bar(event) for event in events_for_day], cls="event-bars"),
         fast.Div(*[_recurring_label(r) for r in recurring_for_day], cls="recurring-labels"),
-        cls=" ".join(classes),
-        hx_get=_calendar_url(year, month, member_id, base=f"/calendar/day/{day_date.isoformat()}"),
-        hx_target="#event-dialog-body",
-        hx_swap="innerHTML",
-        **{"hx-on::after-request": "document.getElementById('event-dialog').showModal()"},
+    ]
+    extra_classes = ["critical-day"] if any(event["is_critical"] for event in events_for_day) else []
+    day_url = _calendar_url(year, month, member_id, base=f"/calendar/day/{day_date.isoformat()}")
+    return day_square(day_date, in_current_month, is_today, badges, day_url, extra_classes=extra_classes)
+
+
+def _calendar_grid(weeks, month, events_map, recurring_by_date, today, year, member_id):
+    return calendar_grid(
+        weeks,
+        month,
+        today,
+        lambda day_date, in_current_month, is_today: _family_day_square(
+            day_date,
+            in_current_month,
+            is_today,
+            events_map.get(day_date, []),
+            recurring_by_date.get(day_date, []),
+            year,
+            month,
+            member_id,
+        ),
     )
-
-
-def _calendar_grid(weeks, month, events_by_date, recurring_by_date, today, year, member_id):
-    cells = [fast.Div(label, cls="calendar-weekday") for label in WEEKDAY_LABELS]
-    for week in weeks:
-        for day_date in week:
-            cells.append(
-                _day_square(
-                    day_date,
-                    events_by_date.get(day_date, []),
-                    recurring_by_date.get(day_date, []),
-                    day_date.month == month,
-                    day_date == today,
-                    year,
-                    month,
-                    member_id,
-                )
-            )
-    return fast.Div(*cells, cls="calendar-grid")
 
 
 def _month_nav(year, month, member_id):
-    prev_year, prev_month = (year - 1, 12) if month == 1 else (year, month - 1)
-    next_year, next_month = (year + 1, 1) if month == 12 else (year, month + 1)
-    today = date.today()
-    return fast.Div(
-        fast.A("< Prev", href=_calendar_url(prev_year, prev_month, member_id)),
-        fast.Span(f"{cal.month_name[month]} {year}", cls="month-label"),
-        fast.A("Next >", href=_calendar_url(next_year, next_month, member_id)),
-        fast.A("Today", href=_calendar_url(today.year, today.month, member_id)),
-        cls="month-nav",
-    )
+    return month_nav(year, month, lambda nav_year, nav_month: _calendar_url(nav_year, nav_month, member_id))
 
 
 def _filter_row(year, month, member_id):
@@ -283,10 +246,10 @@ def calendar_page(sess, year: int = None, month: int = None, member_id: str = No
     today = date.today()
     year = year or today.year
     month = month or today.month
-    weeks = _month_grid(year, month)
+    weeks = month_grid(year, month)
     grid_start, grid_end = weeks[0][0], weeks[-1][-1]
     events = db.list_events_in_range(grid_start.isoformat(), grid_end.isoformat(), owner_id=member_id or None)
-    events_by_date = _events_by_date(events, grid_start, grid_end)
+    events_map = events_by_date(events, grid_start, grid_end)
     recurring_by_date = _recurring_events_by_date(db.list_recurring_events(), weeks)
     return layout(
         "Calendar",
@@ -294,7 +257,7 @@ def calendar_page(sess, year: int = None, month: int = None, member_id: str = No
         _month_nav(year, month, member_id),
         _filter_row(year, month, member_id),
         fast.A("Manage yearly events", href="/calendar/recurring", cls="manage-recurring-link"),
-        _calendar_grid(weeks, month, events_by_date, recurring_by_date, today, year, member_id),
+        _calendar_grid(weeks, month, events_map, recurring_by_date, today, year, member_id),
         _event_dialog(),
     )
 

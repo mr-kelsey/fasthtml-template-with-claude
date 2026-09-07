@@ -48,6 +48,16 @@ def _clean_recurring_events():
 
 
 @pytest.fixture(autouse=True)
+def _clean_farm_events():
+    "Start and end each test with an empty farm_events table (cleaned before plantings, its parent)."
+    with db.engine.begin() as db_connection:
+        db_connection.execute(text("DELETE FROM farm_events"))
+    yield
+    with db.engine.begin() as db_connection:
+        db_connection.execute(text("DELETE FROM farm_events"))
+
+
+@pytest.fixture(autouse=True)
 def _clean_plantings():
     "Start and end each test with an empty plantings table (cleaned before seed_varieties/plants, its parents)."
     with db.engine.begin() as db_connection:
