@@ -493,10 +493,9 @@ class Database:
             )
 
     def delete_land_plot(self, plot_id: int):
-        "Deletes the plot's beds first -- there's no FK ON DELETE CASCADE, so this app-level order avoids orphans."
-        for bed in self.list_beds_for_plot(plot_id):
-            self.delete_bed(bed["id"])
+        "Deletes the plot's beds and the plot itself in one transaction -- there's no FK ON DELETE CASCADE."
         with self.engine.begin() as db_connection:
+            db_connection.execute(text("DELETE FROM beds WHERE plot_id = :plot_id"), {"plot_id": plot_id})
             db_connection.execute(text("DELETE FROM land_plots WHERE id = :id"), {"id": plot_id})
 
     def list_beds_for_plot(self, plot_id: int):

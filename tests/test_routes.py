@@ -804,6 +804,16 @@ def test_add_land_plot_rejects_non_numeric_height(client):
     assert response.status_code == 422
 
 
+def test_add_land_plot_rejects_zero_width(client):
+    response = client.post("/land-plots", data={"name": "Back Field", "width_ft": "0", "height_ft": "60"})
+    assert response.status_code == 422
+
+
+def test_add_land_plot_rejects_negative_height(client):
+    response = client.post("/land-plots", data={"name": "Back Field", "width_ft": "40", "height_ft": "-1"})
+    assert response.status_code == 422
+
+
 def _create_plot(client, name="Back Field", width_ft="40", height_ft="60"):
     client.post("/land-plots", data={"name": name, "width_ft": width_ft, "height_ft": height_ft})
     return db.list_land_plots()[0]["id"]
@@ -878,9 +888,40 @@ def test_add_bed_rejects_non_numeric_width(client):
     assert response.status_code == 422
 
 
+def test_add_bed_rejects_zero_width(client):
+    plot_id = _create_plot(client)
+    response = client.post(
+        f"/land-plots/{plot_id}/beds", data={"label": "Bed 1", "width_ft": "0", "height_ft": "8"}
+    )
+    assert response.status_code == 422
+
+
 def _create_bed(client, plot_id, label="Bed 1", width_ft="4", height_ft="8"):
     client.post(f"/land-plots/{plot_id}/beds", data={"label": label, "width_ft": width_ft, "height_ft": height_ft})
     return db.list_beds_for_plot(plot_id)[0]["id"]
+
+
+def test_place_bed_route_places_unplaced_bed_at_origin(client):
+    plot_id = _create_plot(client)
+    bed_id = _create_bed(client, plot_id)
+    client.post(f"/beds/{bed_id}/place")
+    bed = db.get_bed(bed_id)
+    assert (bed["x"], bed["y"]) == (0, 0)
+
+
+def test_place_bed_route_offsets_second_bed_from_the_first(client):
+    plot_id = _create_plot(client)
+    bed_a_id = _create_bed(client, plot_id, label="Bed A")
+    bed_b_id = _create_bed(client, plot_id, label="Bed B")
+    client.post(f"/beds/{bed_a_id}/place")
+    client.post(f"/beds/{bed_b_id}/place")
+    bed_b = db.get_bed(bed_b_id)
+    assert (bed_b["x"], bed_b["y"]) != (0, 0)
+
+
+def test_place_bed_route_returns_404_when_bed_not_found(client):
+    response = client.post("/beds/999/place")
+    assert response.status_code == 404
 
 
 def test_update_bed_position_returns_204(client):
@@ -920,6 +961,41 @@ def test_update_bed_size_persists(client):
     assert (bed["width_ft"], bed["height_ft"]) == (6, 10)
 
 
+def test_update_bed_position_returns_404_when_bed_not_found(client):
+    response = client.post("/beds/999/position", data={"x": "5", "y": "6"})
+    assert response.status_code == 404
+
+
+def test_update_bed_position_clamps_x_to_plot_width(client):
+    plot_id = _create_plot(client, width_ft="40", height_ft="60")
+    bed_id = _create_bed(client, plot_id, width_ft="4", height_ft="8")
+    client.post(f"/beds/{bed_id}/position", data={"x": "1000", "y": "6"})
+    bed = db.get_bed(bed_id)
+    assert bed["x"] == 36
+
+
+def test_update_bed_position_clamps_negative_y_to_zero(client):
+    plot_id = _create_plot(client, width_ft="40", height_ft="60")
+    bed_id = _create_bed(client, plot_id, width_ft="4", height_ft="8")
+    client.post(f"/beds/{bed_id}/position", data={"x": "5", "y": "-1000"})
+    bed = db.get_bed(bed_id)
+    assert bed["y"] == 0
+
+
+def test_update_bed_size_returns_404_when_bed_not_found(client):
+    response = client.post("/beds/999/size", data={"width_ft": "6", "height_ft": "10"})
+    assert response.status_code == 404
+
+
+def test_update_bed_size_clamps_width_to_remaining_plot_space(client):
+    plot_id = _create_plot(client, width_ft="40", height_ft="60")
+    bed_id = _create_bed(client, plot_id, width_ft="4", height_ft="8")
+    client.post(f"/beds/{bed_id}/position", data={"x": "30", "y": "0"})
+    client.post(f"/beds/{bed_id}/size", data={"width_ft": "1000", "height_ft": "10"})
+    bed = db.get_bed(bed_id)
+    assert bed["width_ft"] == 10
+
+
 def test_bed_edit_fragment_shows_prefilled_label(client):
     plot_id = _create_plot(client)
     bed_id = _create_bed(client, plot_id)
@@ -946,6 +1022,26 @@ def test_edit_bed_redirects_to_plot_map(client):
         follow_redirects=False,
     )
     assert response.headers["location"] == f"/land-plots/{plot_id}/map"
+
+
+def test_edit_bed_rejects_rotation_above_359(client):
+    plot_id = _create_plot(client)
+    bed_id = _create_bed(client, plot_id)
+    response = client.post(
+        f"/beds/{bed_id}/edit",
+        data={"label": "Bed 1", "width_ft": "4", "height_ft": "8", "rotation_deg": "360"},
+    )
+    assert response.status_code == 422
+
+
+def test_edit_bed_rejects_negative_rotation(client):
+    plot_id = _create_plot(client)
+    bed_id = _create_bed(client, plot_id)
+    response = client.post(
+        f"/beds/{bed_id}/edit",
+        data={"label": "Bed 1", "width_ft": "4", "height_ft": "8", "rotation_deg": "-1"},
+    )
+    assert response.status_code == 422
 
 
 def test_delete_bed_removes_it(client):

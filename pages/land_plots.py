@@ -77,6 +77,10 @@ def _validate_plot_fields(name, width_ft, height_ft):
     height_ft, error = parse_required_int(height_ft, "Height")
     if error:
         return fast.Response(error, status_code=422)
+    if width_ft <= 0:
+        return fast.Response("Width must be a positive number.", status_code=422)
+    if height_ft <= 0:
+        return fast.Response("Height must be a positive number.", status_code=422)
     return name, width_ft, height_ft
 
 
@@ -199,6 +203,10 @@ def _validate_bed_dimensions(width_ft, height_ft):
     height_ft, error = parse_required_int(height_ft, "Height")
     if error:
         return fast.Response(error, status_code=422)
+    if width_ft <= 0:
+        return fast.Response("Width must be a positive number.", status_code=422)
+    if height_ft <= 0:
+        return fast.Response("Height must be a positive number.", status_code=422)
     return width_ft, height_ft
 
 
@@ -225,35 +233,66 @@ def add_bed_route(
     return fast.Redirect(f"/land-plots/{plot_id}/map")
 
 
+def _clamp(value, low, high):
+    return max(low, min(value, high))
+
+
 @router("/beds/{bed_id}/position", methods=["post"])
 def update_bed_position_route(bed_id: int, x: str, y: str):
+    bed = db.get_bed(bed_id)
+    if bed is None:
+        return fast.Response("Bed not found.", status_code=404)
     x, error = parse_required_int(x, "X")
     if error:
         return fast.Response(error, status_code=422)
     y, error = parse_required_int(y, "Y")
     if error:
         return fast.Response(error, status_code=422)
+    plot = db.get_land_plot(bed["plot_id"])
+    x = _clamp(x, 0, max(0, plot["width_ft"] - bed["width_ft"]))
+    y = _clamp(y, 0, max(0, plot["height_ft"] - bed["height_ft"]))
     db.update_bed_position(bed_id, x, y)
     return fast.Response(status_code=204)
 
 
+def _next_placement_position(plot, placed_beds):
+    "Diagonally offsets each newly-placed bed by 1ft so consecutive placements don't stack exactly."
+    occupied = {(b["x"], b["y"]) for b in placed_beds}
+    max_x = max(0, plot["width_ft"] - 1)
+    max_y = max(0, plot["height_ft"] - 1)
+    offset = 0
+    while (min(offset, max_x), min(offset, max_y)) in occupied and offset < max(max_x, max_y):
+        offset += 1
+    return min(offset, max_x), min(offset, max_y)
+
+
 @router("/beds/{bed_id}/place", methods=["post"])
 def place_bed_route(bed_id: int):
-    "Moves an unplaced bed onto the map at a default position -- the plain-form counterpart to /position (JS drag)."
+    "Moves an unplaced bed onto the map -- the plain-form counterpart to /position (JS drag)."
     bed = db.get_bed(bed_id)
     if bed is None:
         return fast.Response("Bed not found.", status_code=404)
-    db.update_bed_position(bed_id, 0, 0)
+    plot = db.get_land_plot(bed["plot_id"])
+    placed_beds = [b for b in db.list_beds_for_plot(bed["plot_id"]) if b["x"] is not None and b["y"] is not None]
+    x, y = _next_placement_position(plot, placed_beds)
+    db.update_bed_position(bed_id, x, y)
     return fast.Redirect(f"/land-plots/{bed['plot_id']}/map")
 
 
 @router("/beds/{bed_id}/size", methods=["post"])
 def update_bed_size_route(bed_id: int, width_ft: str, height_ft: str):
+    bed = db.get_bed(bed_id)
+    if bed is None:
+        return fast.Response("Bed not found.", status_code=404)
     validated = _validate_bed_dimensions(width_ft, height_ft)
     if isinstance(validated, fast.Response):
         return validated
     width_ft, height_ft = validated
-    db.update_bed_size(bed_id, max(1, width_ft), max(1, height_ft))
+    plot = db.get_land_plot(bed["plot_id"])
+    x, y = bed["x"] or 0, bed["y"] or 0
+    width_ft = _clamp(width_ft, 1, max(1, plot["width_ft"] - x))
+    height_ft = _clamp(height_ft, 1, max(1, plot["height_ft"] - y))
+    db.update_bed_size(bed_id, width_ft, height_ft)
     return fast.Response(status_code=204)
 
 
@@ -315,6 +354,8 @@ def update_bed_route(
     ok, rotation_deg = parse_optional_int(rotation_deg)
     if not ok:
         return fast.Response("Rotation must be a number.", status_code=422)
+    if rotation_deg is not None and not (0 <= rotation_deg <= 359):
+        return fast.Response("Rotation must be between 0 and 359 degrees.", status_code=422)
     db.update_bed(
         bed_id, label, width_ft, height_ft, rotation_deg or 0,
         sun_exposure=sun_exposure.strip() or None, irrigation_zone=irrigation_zone.strip() or None,
