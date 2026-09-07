@@ -66,6 +66,30 @@ SCHEMA_STATEMENTS = [
         created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
     )
     """,
+    """
+    CREATE TABLE IF NOT EXISTS land_plots (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        width_ft INTEGER NOT NULL,
+        height_ft INTEGER NOT NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS beds (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        plot_id INTEGER NOT NULL,
+        label TEXT NOT NULL,
+        x INTEGER,
+        y INTEGER,
+        width_ft INTEGER NOT NULL,
+        height_ft INTEGER NOT NULL,
+        rotation_deg INTEGER NOT NULL DEFAULT 0,
+        sun_exposure TEXT,
+        irrigation_zone TEXT,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
+    """,
 ]
 
 _EVENT_COLUMNS = (
@@ -83,6 +107,12 @@ _SEED_VARIETY_COLUMNS = f"id, common_name, name, plant_family, genus, species, {
 
 _PLANTING_COLUMNS = (
     "id, variety_id, bed_id, location, planted_date, quantity, quantity_germinated, notes, created_at"
+)
+
+_LAND_PLOT_COLUMNS = "id, name, width_ft, height_ft, created_at"
+
+_BED_COLUMNS = (
+    "id, plot_id, label, x, y, width_ft, height_ft, rotation_deg, sun_exposure, irrigation_zone, created_at"
 )
 
 
@@ -431,6 +461,120 @@ class Database:
     def delete_planting(self, planting_id: int):
         with self.engine.begin() as db_connection:
             db_connection.execute(text("DELETE FROM plantings WHERE id = :id"), {"id": planting_id})
+
+    def list_land_plots(self):
+        with self.engine.connect() as db_connection:
+            return db_connection.execute(
+                text(f"SELECT {_LAND_PLOT_COLUMNS} FROM land_plots ORDER BY name")
+            ).mappings().all()
+
+    def get_land_plot(self, plot_id: int):
+        with self.engine.connect() as db_connection:
+            return db_connection.execute(
+                text(f"SELECT {_LAND_PLOT_COLUMNS} FROM land_plots WHERE id = :id"),
+                {"id": plot_id},
+            ).mappings().first()
+
+    def add_land_plot(self, name: str, width_ft: int, height_ft: int):
+        with self.engine.begin() as db_connection:
+            db_connection.execute(
+                text("INSERT INTO land_plots (name, width_ft, height_ft) VALUES (:name, :width_ft, :height_ft)"),
+                {"name": name, "width_ft": width_ft, "height_ft": height_ft},
+            )
+
+    def update_land_plot(self, plot_id: int, name: str, width_ft: int, height_ft: int):
+        with self.engine.begin() as db_connection:
+            db_connection.execute(
+                text(
+                    "UPDATE land_plots SET name = :name, width_ft = :width_ft, height_ft = :height_ft "
+                    "WHERE id = :id"
+                ),
+                {"id": plot_id, "name": name, "width_ft": width_ft, "height_ft": height_ft},
+            )
+
+    def delete_land_plot(self, plot_id: int):
+        "Deletes the plot's beds first -- there's no FK ON DELETE CASCADE, so this app-level order avoids orphans."
+        for bed in self.list_beds_for_plot(plot_id):
+            self.delete_bed(bed["id"])
+        with self.engine.begin() as db_connection:
+            db_connection.execute(text("DELETE FROM land_plots WHERE id = :id"), {"id": plot_id})
+
+    def list_beds_for_plot(self, plot_id: int):
+        with self.engine.connect() as db_connection:
+            return db_connection.execute(
+                text(f"SELECT {_BED_COLUMNS} FROM beds WHERE plot_id = :plot_id ORDER BY label"),
+                {"plot_id": plot_id},
+            ).mappings().all()
+
+    def get_bed(self, bed_id: int):
+        with self.engine.connect() as db_connection:
+            return db_connection.execute(
+                text(f"SELECT {_BED_COLUMNS} FROM beds WHERE id = :id"), {"id": bed_id}
+            ).mappings().first()
+
+    def add_bed(
+        self,
+        plot_id: int,
+        label: str,
+        width_ft: int,
+        height_ft: int,
+        sun_exposure: str = None,
+        irrigation_zone: str = None,
+    ):
+        "New beds start unplaced (x/y NULL) until dragged or 'added to map'."
+        with self.engine.begin() as db_connection:
+            db_connection.execute(
+                text(
+                    "INSERT INTO beds (plot_id, label, width_ft, height_ft, sun_exposure, irrigation_zone) "
+                    "VALUES (:plot_id, :label, :width_ft, :height_ft, :sun_exposure, :irrigation_zone)"
+                ),
+                {
+                    "plot_id": plot_id, "label": label, "width_ft": width_ft, "height_ft": height_ft,
+                    "sun_exposure": sun_exposure or None, "irrigation_zone": irrigation_zone or None,
+                },
+            )
+
+    def update_bed(
+        self,
+        bed_id: int,
+        label: str,
+        width_ft: int,
+        height_ft: int,
+        rotation_deg: int,
+        sun_exposure: str = None,
+        irrigation_zone: str = None,
+    ):
+        "Full edit of a bed's metadata/size/rotation -- does not touch position, see update_bed_position."
+        with self.engine.begin() as db_connection:
+            db_connection.execute(
+                text(
+                    "UPDATE beds SET label = :label, width_ft = :width_ft, height_ft = :height_ft, "
+                    "rotation_deg = :rotation_deg, sun_exposure = :sun_exposure, irrigation_zone = :irrigation_zone "
+                    "WHERE id = :id"
+                ),
+                {
+                    "id": bed_id, "label": label, "width_ft": width_ft, "height_ft": height_ft,
+                    "rotation_deg": rotation_deg, "sun_exposure": sun_exposure or None,
+                    "irrigation_zone": irrigation_zone or None,
+                },
+            )
+
+    def update_bed_position(self, bed_id: int, x: int, y: int):
+        with self.engine.begin() as db_connection:
+            db_connection.execute(
+                text("UPDATE beds SET x = :x, y = :y WHERE id = :id"), {"id": bed_id, "x": x, "y": y}
+            )
+
+    def update_bed_size(self, bed_id: int, width_ft: int, height_ft: int):
+        with self.engine.begin() as db_connection:
+            db_connection.execute(
+                text("UPDATE beds SET width_ft = :width_ft, height_ft = :height_ft WHERE id = :id"),
+                {"id": bed_id, "width_ft": width_ft, "height_ft": height_ft},
+            )
+
+    def delete_bed(self, bed_id: int):
+        with self.engine.begin() as db_connection:
+            db_connection.execute(text("DELETE FROM beds WHERE id = :id"), {"id": bed_id})
 
 
 _instance = Database()

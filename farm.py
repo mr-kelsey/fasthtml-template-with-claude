@@ -19,6 +19,16 @@ def parse_optional_int(value: str):
         return False, None
 
 
+def parse_required_int(value: str, field_label: str):
+    "Returns (int, None) or (None, error_message) if value is blank or not a valid integer."
+    if value is None or value.strip() == "":
+        return None, f"{field_label} is required."
+    try:
+        return int(value), None
+    except ValueError:
+        return None, f"{field_label} must be a number."
+
+
 def parse_agronomic_fields(
     germination_days_min: str,
     germination_days_max: str,

@@ -762,3 +762,201 @@ def test_non_overlapping_plantings_at_same_location_show_no_warning(client):
     )
     response = client.get("/plantings")
     assert "Overlaps with" not in response.text
+
+
+def test_land_plots_page_returns_200(client):
+    response = client.get("/land-plots")
+    assert response.status_code == 200
+
+
+def test_land_plots_page_shows_empty_state_when_none_exist(client):
+    response = client.get("/land-plots")
+    assert "No land plots yet" in response.text
+
+
+def test_add_land_plot_redirects_with_303(client):
+    response = client.post(
+        "/land-plots", data={"name": "Back Field", "width_ft": "40", "height_ft": "60"}, follow_redirects=False
+    )
+    assert response.status_code == 303
+
+
+def test_add_land_plot_appears_in_list(client):
+    client.post("/land-plots", data={"name": "Back Field", "width_ft": "40", "height_ft": "60"})
+    response = client.get("/land-plots")
+    assert "Back Field" in response.text
+
+
+def test_add_land_plot_rejects_blank_name(client):
+    response = client.post("/land-plots", data={"name": "", "width_ft": "40", "height_ft": "60"})
+    assert response.status_code == 422
+
+
+def test_add_land_plot_rejects_blank_width(client):
+    response = client.post("/land-plots", data={"name": "Back Field", "width_ft": "", "height_ft": "60"})
+    assert response.status_code == 422
+
+
+def test_add_land_plot_rejects_non_numeric_height(client):
+    response = client.post(
+        "/land-plots", data={"name": "Back Field", "width_ft": "40", "height_ft": "not-a-number"}
+    )
+    assert response.status_code == 422
+
+
+def _create_plot(client, name="Back Field", width_ft="40", height_ft="60"):
+    client.post("/land-plots", data={"name": name, "width_ft": width_ft, "height_ft": height_ft})
+    return db.list_land_plots()[0]["id"]
+
+
+def test_edit_land_plot_page_shows_prefilled_name(client):
+    plot_id = _create_plot(client)
+    response = client.get(f"/land-plots/{plot_id}/edit")
+    assert 'value="Back Field"' in response.text
+
+
+def test_edit_land_plot_updates_dimensions(client):
+    plot_id = _create_plot(client)
+    client.post(f"/land-plots/{plot_id}/edit", data={"name": "Back Field", "width_ft": "50", "height_ft": "70"})
+    plot = db.get_land_plot(plot_id)
+    assert (plot["width_ft"], plot["height_ft"]) == (50, 70)
+
+
+def test_delete_land_plot_removes_it(client):
+    plot_id = _create_plot(client)
+    client.post(f"/land-plots/{plot_id}/delete")
+    assert db.list_land_plots() == []
+
+
+def test_delete_land_plot_removes_its_beds(client):
+    plot_id = _create_plot(client)
+    client.post(f"/land-plots/{plot_id}/beds", data={"label": "Bed 1", "width_ft": "4", "height_ft": "8"})
+    client.post(f"/land-plots/{plot_id}/delete")
+    assert db.list_beds_for_plot(plot_id) == []
+
+
+def test_land_plot_map_page_returns_200(client):
+    plot_id = _create_plot(client)
+    response = client.get(f"/land-plots/{plot_id}/map")
+    assert response.status_code == 200
+
+
+def test_land_plot_map_page_shows_plot_name(client):
+    plot_id = _create_plot(client)
+    response = client.get(f"/land-plots/{plot_id}/map")
+    assert "Back Field" in response.text
+
+
+def test_add_bed_redirects_with_303(client):
+    plot_id = _create_plot(client)
+    response = client.post(
+        f"/land-plots/{plot_id}/beds",
+        data={"label": "Bed 1", "width_ft": "4", "height_ft": "8"},
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+
+
+def test_add_bed_starts_unplaced_on_map_page(client):
+    plot_id = _create_plot(client)
+    client.post(f"/land-plots/{plot_id}/beds", data={"label": "Bed 1", "width_ft": "4", "height_ft": "8"})
+    response = client.get(f"/land-plots/{plot_id}/map")
+    assert "Bed 1" in response.text
+
+
+def test_add_bed_rejects_blank_label(client):
+    plot_id = _create_plot(client)
+    response = client.post(f"/land-plots/{plot_id}/beds", data={"label": "", "width_ft": "4", "height_ft": "8"})
+    assert response.status_code == 422
+
+
+def test_add_bed_rejects_non_numeric_width(client):
+    plot_id = _create_plot(client)
+    response = client.post(
+        f"/land-plots/{plot_id}/beds", data={"label": "Bed 1", "width_ft": "not-a-number", "height_ft": "8"}
+    )
+    assert response.status_code == 422
+
+
+def _create_bed(client, plot_id, label="Bed 1", width_ft="4", height_ft="8"):
+    client.post(f"/land-plots/{plot_id}/beds", data={"label": label, "width_ft": width_ft, "height_ft": height_ft})
+    return db.list_beds_for_plot(plot_id)[0]["id"]
+
+
+def test_update_bed_position_returns_204(client):
+    plot_id = _create_plot(client)
+    bed_id = _create_bed(client, plot_id)
+    response = client.post(f"/beds/{bed_id}/position", data={"x": "5", "y": "6"})
+    assert response.status_code == 204
+
+
+def test_update_bed_position_persists(client):
+    plot_id = _create_plot(client)
+    bed_id = _create_bed(client, plot_id)
+    client.post(f"/beds/{bed_id}/position", data={"x": "5", "y": "6"})
+    bed = db.get_bed(bed_id)
+    assert (bed["x"], bed["y"]) == (5, 6)
+
+
+def test_update_bed_position_rejects_non_numeric_x(client):
+    plot_id = _create_plot(client)
+    bed_id = _create_bed(client, plot_id)
+    response = client.post(f"/beds/{bed_id}/position", data={"x": "not-a-number", "y": "6"})
+    assert response.status_code == 422
+
+
+def test_update_bed_size_returns_204(client):
+    plot_id = _create_plot(client)
+    bed_id = _create_bed(client, plot_id)
+    response = client.post(f"/beds/{bed_id}/size", data={"width_ft": "6", "height_ft": "10"})
+    assert response.status_code == 204
+
+
+def test_update_bed_size_persists(client):
+    plot_id = _create_plot(client)
+    bed_id = _create_bed(client, plot_id)
+    client.post(f"/beds/{bed_id}/size", data={"width_ft": "6", "height_ft": "10"})
+    bed = db.get_bed(bed_id)
+    assert (bed["width_ft"], bed["height_ft"]) == (6, 10)
+
+
+def test_bed_edit_fragment_shows_prefilled_label(client):
+    plot_id = _create_plot(client)
+    bed_id = _create_bed(client, plot_id)
+    response = client.get(f"/beds/{bed_id}/edit-fragment")
+    assert 'value="Bed 1"' in response.text
+
+
+def test_edit_bed_updates_label(client):
+    plot_id = _create_plot(client)
+    bed_id = _create_bed(client, plot_id)
+    client.post(
+        f"/beds/{bed_id}/edit",
+        data={"label": "Updated Bed", "width_ft": "4", "height_ft": "8", "rotation_deg": "0"},
+    )
+    assert db.get_bed(bed_id)["label"] == "Updated Bed"
+
+
+def test_edit_bed_redirects_to_plot_map(client):
+    plot_id = _create_plot(client)
+    bed_id = _create_bed(client, plot_id)
+    response = client.post(
+        f"/beds/{bed_id}/edit",
+        data={"label": "Bed 1", "width_ft": "4", "height_ft": "8", "rotation_deg": "0"},
+        follow_redirects=False,
+    )
+    assert response.headers["location"] == f"/land-plots/{plot_id}/map"
+
+
+def test_delete_bed_removes_it(client):
+    plot_id = _create_plot(client)
+    bed_id = _create_bed(client, plot_id)
+    client.post(f"/beds/{bed_id}/delete")
+    assert db.list_beds_for_plot(plot_id) == []
+
+
+def test_delete_bed_redirects_to_plot_map(client):
+    plot_id = _create_plot(client)
+    bed_id = _create_bed(client, plot_id)
+    response = client.post(f"/beds/{bed_id}/delete", follow_redirects=False)
+    assert response.headers["location"] == f"/land-plots/{plot_id}/map"

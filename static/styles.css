@@ -113,3 +113,61 @@ dialog#event-dialog {
     max-width: 28rem;
     width: 100%;
 }
+
+.land-map-layout {
+    display: flex;
+    gap: 1.5rem;
+    align-items: flex-start;
+}
+
+.land-map-svg {
+    flex: 1 1 auto;
+    width: 100%;
+    height: 70vh;
+    border: 1px solid var(--pico-muted-border-color);
+    border-radius: var(--pico-border-radius);
+    background-color: var(--pico-card-sectioning-background-color);
+    touch-action: none;
+}
+
+.land-map-sidebar {
+    flex: 0 0 16rem;
+}
+
+.bed-group {
+    cursor: move;
+}
+
+.bed-rect {
+    fill: var(--pico-primary-background);
+    stroke: var(--pico-primary);
+    stroke-width: 0.1;
+}
+
+.bed-label {
+    font-size: 0.6;
+    fill: var(--pico-primary-inverse);
+    pointer-events: none;
+    user-select: none;
+}
+
+.resize-handle {
+    fill: var(--pico-primary);
+    cursor: nwse-resize;
+}
+
+.unplaced-bed-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+}
+
+.unplaced-bed-item form {
+    margin: 0;
+}
+
+dialog#bed-dialog {
+    max-width: 28rem;
+    width: 100%;
+}

@@ -318,3 +318,155 @@ def test_delete_planting_removes_it():
 def test_delete_nonexistent_planting_is_a_noop():
     db.delete_planting(999999)
     assert db.list_plantings() == []
+
+
+def test_list_land_plots_returns_empty_list_when_none_exist():
+    assert db.list_land_plots() == []
+
+
+def test_add_land_plot_persists_name_and_dimensions():
+    db.add_land_plot("Back Field", 40, 60)
+    plot = db.list_land_plots()[0]
+    assert (plot["name"], plot["width_ft"], plot["height_ft"]) == ("Back Field", 40, 60)
+
+
+def test_land_plots_ordered_by_name():
+    db.add_land_plot("Zeta Field", 10, 10)
+    db.add_land_plot("Alpha Field", 10, 10)
+    assert [p["name"] for p in db.list_land_plots()] == ["Alpha Field", "Zeta Field"]
+
+
+def test_get_land_plot_returns_matching_row():
+    db.add_land_plot("Back Field", 40, 60)
+    plot_id = db.list_land_plots()[0]["id"]
+    assert db.get_land_plot(plot_id)["name"] == "Back Field"
+
+
+def test_get_land_plot_returns_none_when_not_found():
+    assert db.get_land_plot(999999) is None
+
+
+def test_update_land_plot_changes_dimensions():
+    db.add_land_plot("Back Field", 40, 60)
+    plot_id = db.list_land_plots()[0]["id"]
+    db.update_land_plot(plot_id, "Back Field", 50, 70)
+    plot = db.get_land_plot(plot_id)
+    assert (plot["width_ft"], plot["height_ft"]) == (50, 70)
+
+
+def test_delete_land_plot_removes_it():
+    db.add_land_plot("To delete", 10, 10)
+    plot_id = db.list_land_plots()[0]["id"]
+    db.delete_land_plot(plot_id)
+    assert db.list_land_plots() == []
+
+
+def test_delete_land_plot_cascades_to_its_beds():
+    db.add_land_plot("Back Field", 40, 60)
+    plot_id = db.list_land_plots()[0]["id"]
+    db.add_bed(plot_id, "Bed 1", 4, 8)
+    db.delete_land_plot(plot_id)
+    assert db.list_beds_for_plot(plot_id) == []
+
+
+def test_delete_nonexistent_land_plot_is_a_noop():
+    db.delete_land_plot(999999)
+    assert db.list_land_plots() == []
+
+
+def _add_plot(name="Back Field", width_ft=40, height_ft=60):
+    db.add_land_plot(name, width_ft, height_ft)
+    return db.list_land_plots()[0]["id"]
+
+
+def test_list_beds_for_plot_returns_empty_list_when_none_exist():
+    plot_id = _add_plot()
+    assert db.list_beds_for_plot(plot_id) == []
+
+
+def test_add_bed_persists_label_and_dimensions():
+    plot_id = _add_plot()
+    db.add_bed(plot_id, "Bed 1", 4, 8)
+    bed = db.list_beds_for_plot(plot_id)[0]
+    assert (bed["label"], bed["width_ft"], bed["height_ft"]) == ("Bed 1", 4, 8)
+
+
+def test_add_bed_starts_unplaced():
+    plot_id = _add_plot()
+    db.add_bed(plot_id, "Bed 1", 4, 8)
+    bed = db.list_beds_for_plot(plot_id)[0]
+    assert (bed["x"], bed["y"]) == (None, None)
+
+
+def test_add_bed_defaults_rotation_to_zero():
+    plot_id = _add_plot()
+    db.add_bed(plot_id, "Bed 1", 4, 8)
+    assert db.list_beds_for_plot(plot_id)[0]["rotation_deg"] == 0
+
+
+def test_beds_for_plot_ordered_by_label():
+    plot_id = _add_plot()
+    db.add_bed(plot_id, "Bed 2", 4, 8)
+    db.add_bed(plot_id, "Bed 1", 4, 8)
+    assert [b["label"] for b in db.list_beds_for_plot(plot_id)] == ["Bed 1", "Bed 2"]
+
+
+def test_get_bed_returns_matching_row():
+    plot_id = _add_plot()
+    db.add_bed(plot_id, "Bed 1", 4, 8)
+    bed_id = db.list_beds_for_plot(plot_id)[0]["id"]
+    assert db.get_bed(bed_id)["label"] == "Bed 1"
+
+
+def test_get_bed_returns_none_when_not_found():
+    assert db.get_bed(999999) is None
+
+
+def test_update_bed_changes_label_and_rotation():
+    plot_id = _add_plot()
+    db.add_bed(plot_id, "Original", 4, 8)
+    bed_id = db.list_beds_for_plot(plot_id)[0]["id"]
+    db.update_bed(bed_id, "Updated", 4, 8, 90)
+    bed = db.get_bed(bed_id)
+    assert (bed["label"], bed["rotation_deg"]) == ("Updated", 90)
+
+
+def test_update_bed_does_not_change_position():
+    plot_id = _add_plot()
+    db.add_bed(plot_id, "Bed 1", 4, 8)
+    bed_id = db.list_beds_for_plot(plot_id)[0]["id"]
+    db.update_bed_position(bed_id, 5, 6)
+    db.update_bed(bed_id, "Bed 1", 4, 8, 0)
+    bed = db.get_bed(bed_id)
+    assert (bed["x"], bed["y"]) == (5, 6)
+
+
+def test_update_bed_position_persists_coordinates():
+    plot_id = _add_plot()
+    db.add_bed(plot_id, "Bed 1", 4, 8)
+    bed_id = db.list_beds_for_plot(plot_id)[0]["id"]
+    db.update_bed_position(bed_id, 12, 20)
+    bed = db.get_bed(bed_id)
+    assert (bed["x"], bed["y"]) == (12, 20)
+
+
+def test_update_bed_size_persists_dimensions():
+    plot_id = _add_plot()
+    db.add_bed(plot_id, "Bed 1", 4, 8)
+    bed_id = db.list_beds_for_plot(plot_id)[0]["id"]
+    db.update_bed_size(bed_id, 6, 10)
+    bed = db.get_bed(bed_id)
+    assert (bed["width_ft"], bed["height_ft"]) == (6, 10)
+
+
+def test_delete_bed_removes_it():
+    plot_id = _add_plot()
+    db.add_bed(plot_id, "To delete", 4, 8)
+    bed_id = db.list_beds_for_plot(plot_id)[0]["id"]
+    db.delete_bed(bed_id)
+    assert db.list_beds_for_plot(plot_id) == []
+
+
+def test_delete_nonexistent_bed_is_a_noop():
+    db.delete_bed(999999)
+    assert db.list_beds_for_plot(999999) == []

@@ -7,6 +7,7 @@ NAV_LINKS = [
     ("Calendar", "/calendar"),
     ("Varieties", "/seed-varieties"),
     ("Plantings", "/plantings"),
+    ("Land Map", "/land-plots"),
 ]
 
 
