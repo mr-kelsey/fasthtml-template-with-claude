@@ -1,4 +1,4 @@
-"""Shared helpers for the farm-planning pages (plants.py, seed_varieties.py, plantings.py)."""
+"""Shared helpers for the farm-planning pages (seed_varieties.py, plantings.py)."""
 
 from datetime import date, timedelta
 

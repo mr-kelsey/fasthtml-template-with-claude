@@ -3,7 +3,7 @@ from datetime import date
 from fasthtml import common as fast
 
 from layout import layout
-from farm import parse_optional_int, compute_window
+from farm.helpers import parse_optional_int, compute_window
 import db
 
 router = fast.APIRouter()

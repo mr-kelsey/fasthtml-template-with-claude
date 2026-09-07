@@ -2,7 +2,7 @@ from fasthtml import common as fast
 from fasthtml.svg import Svg, Rect, G, Text, Defs, Pattern, Path
 
 from layout import layout
-from farm import parse_required_int, parse_optional_int
+from farm.helpers import parse_required_int, parse_optional_int
 import db
 
 router = fast.APIRouter()
