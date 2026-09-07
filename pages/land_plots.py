@@ -1,11 +1,20 @@
 from fasthtml import common as fast
-from fasthtml.svg import Svg, Rect, G, Text
+from fasthtml.svg import Svg, Rect, G, Text, Defs, Pattern, Path
 
 from layout import layout
 from farm import parse_required_int, parse_optional_int
 import db
 
 router = fast.APIRouter()
+
+# Bed labels are sized off the bed's own dimensions -- and the label text length, so a long
+# label on a narrow bed shrinks to fit rather than overflowing -- so a label never dwarfs its
+# bed. Kept in sync with the matching constants/logic in static/land-map.js (live resize).
+LABEL_FONT_RATIO = 0.3
+LABEL_FONT_MIN = 0.2
+LABEL_FONT_MAX = 0.5
+LABEL_CHAR_WIDTH_RATIO = 0.6  # rough average glyph width as a fraction of font-size
+MIN_BED_DIM_FOR_LABEL = 1  # ft; below this no label fits legibly, so it's hidden
 
 
 def _optional_value(row, field):
@@ -145,12 +154,27 @@ def _unplaced_bed_item(bed):
     )
 
 
+def _label_font_size(width_ft, length_ft, label):
+    "Returns None when no legible size fits the bed (caller hides the label in that case)."
+    if min(width_ft, length_ft) < MIN_BED_DIM_FOR_LABEL:
+        return None
+    by_dim = min(width_ft, length_ft) * LABEL_FONT_RATIO
+    by_width = (width_ft * 0.9) / (max(len(label), 1) * LABEL_CHAR_WIDTH_RATIO)
+    font_size = min(LABEL_FONT_MAX, by_dim, by_width)
+    return round(font_size, 2) if font_size >= LABEL_FONT_MIN else None
+
+
 def _bed_group(bed):
     x, y = bed["x"], bed["y"]
     center_x, center_y = bed["width_ft"] / 2, bed["length_ft"] / 2
+    font_size = _label_font_size(bed["width_ft"], bed["length_ft"], bed["label"])
     return G(
         Rect(bed["width_ft"], bed["length_ft"], cls="bed-rect"),
-        Text(bed["label"], x=center_x, y=center_y, text_anchor="middle", dominant_baseline="middle", cls="bed-label"),
+        Text(
+            bed["label"], x=center_x, y=center_y, text_anchor="middle", dominant_baseline="middle",
+            cls="bed-label", font_size=font_size or LABEL_FONT_MIN,
+            style="display:none" if font_size is None else None,
+        ),
         Rect(1, 1, x=bed["width_ft"] - 1, y=bed["length_ft"] - 1, cls="resize-handle"),
         id=f"bed-{bed['id']}",
         cls="bed-group",
@@ -171,6 +195,14 @@ def land_plot_map_page(plot_id: int):
     placed_beds = [b for b in beds if b["x"] is not None and b["y"] is not None]
     unplaced_beds = [b for b in beds if b["x"] is None or b["y"] is None]
     canvas = Svg(
+        Defs(
+            Pattern(
+                Path(d="M 1 0 L 0 0 0 1", cls="grid-line"),
+                id="foot-grid", width=1, height=1, patternUnits="userSpaceOnUse",
+            )
+        ),
+        Rect(plot["width_ft"], plot["length_ft"], cls="grid-bg"),
+        Rect(plot["width_ft"], plot["length_ft"], cls="plot-boundary"),
         *[_bed_group(bed) for bed in placed_beds],
         viewBox=f"0 0 {plot['width_ft']} {plot['length_ft']}",
         cls="land-map-svg",

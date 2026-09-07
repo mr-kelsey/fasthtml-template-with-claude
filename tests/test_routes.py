@@ -857,6 +857,18 @@ def test_land_plot_map_page_shows_plot_name(client):
     assert "Back Field" in response.text
 
 
+def test_land_plot_map_page_includes_foot_grid_pattern(client):
+    plot_id = _create_plot(client)
+    response = client.get(f"/land-plots/{plot_id}/map")
+    assert "foot-grid" in response.text
+
+
+def test_land_plot_map_page_includes_plot_boundary(client):
+    plot_id = _create_plot(client)
+    response = client.get(f"/land-plots/{plot_id}/map")
+    assert "plot-boundary" in response.text
+
+
 def test_add_bed_redirects_with_303(client):
     plot_id = _create_plot(client)
     response = client.post(
@@ -899,6 +911,22 @@ def test_add_bed_rejects_zero_width(client):
 def _create_bed(client, plot_id, label="Bed 1", width_ft="4", length_ft="8"):
     client.post(f"/land-plots/{plot_id}/beds", data={"label": label, "width_ft": width_ft, "length_ft": length_ft})
     return db.list_beds_for_plot(plot_id)[0]["id"]
+
+
+def test_bed_label_shows_at_readable_size_for_a_normal_bed(client):
+    plot_id = _create_plot(client)
+    bed_id = _create_bed(client, plot_id, label="Bed 1", width_ft="8", length_ft="8")
+    client.post(f"/beds/{bed_id}/position", data={"x": "0", "y": "0"})
+    response = client.get(f"/land-plots/{plot_id}/map")
+    assert 'font-size="0.5"' in response.text
+
+
+def test_bed_label_hides_when_label_too_long_to_fit(client):
+    plot_id = _create_plot(client)
+    bed_id = _create_bed(client, plot_id, label="A Very Long Bed Label Indeed", width_ft="1", length_ft="1")
+    client.post(f"/beds/{bed_id}/position", data={"x": "0", "y": "0"})
+    response = client.get(f"/land-plots/{plot_id}/map")
+    assert "display:none" in response.text
 
 
 def test_place_bed_route_places_unplaced_bed_at_origin(client):

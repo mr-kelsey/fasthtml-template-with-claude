@@ -6,6 +6,27 @@
 
     var DRAG_THRESHOLD_PX = 4;
     var suppressNextClick = false;
+    var plotWidth = parseFloat(svg.dataset.plotWidth);
+    var plotLength = parseFloat(svg.dataset.plotLength);
+
+    // Kept in sync with the matching constants/logic in pages/land_plots.py (initial render).
+    var LABEL_FONT_RATIO = 0.3;
+    var LABEL_FONT_MIN = 0.2;
+    var LABEL_FONT_MAX = 0.5;
+    var LABEL_CHAR_WIDTH_RATIO = 0.6;
+    var MIN_BED_DIM_FOR_LABEL = 1;
+
+    function labelFontSize(width, length, label) {
+        if (Math.min(width, length) < MIN_BED_DIM_FOR_LABEL) return null;
+        var byDim = Math.min(width, length) * LABEL_FONT_RATIO;
+        var byWidth = (width * 0.9) / (Math.max(label.length, 1) * LABEL_CHAR_WIDTH_RATIO);
+        var fontSize = Math.min(LABEL_FONT_MAX, byDim, byWidth);
+        return fontSize >= LABEL_FONT_MIN ? fontSize : null;
+    }
+
+    function clamp(value, low, high) {
+        return Math.max(low, Math.min(value, high));
+    }
 
     function toFeet(clientX, clientY) {
         var rect = svg.getBoundingClientRect();
@@ -44,6 +65,11 @@
     }
 
     function startDrag(group, downEvent) {
+        var rect = group.querySelector(".bed-rect");
+        var bedWidth = parseFloat(rect.getAttribute("width"));
+        var bedLength = parseFloat(rect.getAttribute("height"));
+        var maxX = Math.max(0, plotWidth - bedWidth);
+        var maxY = Math.max(0, plotLength - bedLength);
         var origin = currentTranslate(group);
         var originalTransform = group.getAttribute("transform");
         var startFeet = toFeet(downEvent.clientX, downEvent.clientY);
@@ -60,8 +86,8 @@
                 moved = true;
             }
             var point = toFeet(e.clientX, e.clientY);
-            newX = Math.round(origin.x + (point.x - startFeet.x));
-            newY = Math.round(origin.y + (point.y - startFeet.y));
+            newX = clamp(Math.round(origin.x + (point.x - startFeet.x)), 0, maxX);
+            newY = clamp(Math.round(origin.y + (point.y - startFeet.y)), 0, maxY);
             group.setAttribute("transform", "translate(" + newX + "," + newY + ")" + currentRotatePart(group));
         }
 
@@ -103,6 +129,8 @@
         var startLength = parseFloat(rect.getAttribute("height"));
         var translate = currentTranslate(group);
         var rotateDeg = currentRotateDeg(group);
+        var maxWidth = Math.max(1, plotWidth - translate.x);
+        var maxLength = Math.max(1, plotLength - translate.y);
         var startFeet = toFeet(downEvent.clientX, downEvent.clientY);
         var moved = false;
         var newWidth = startWidth;
@@ -117,6 +145,13 @@
             if (label) {
                 label.setAttribute("x", width / 2);
                 label.setAttribute("y", length / 2);
+                var fontSize = labelFontSize(width, length, label.textContent);
+                if (fontSize) {
+                    label.style.display = "";
+                    label.setAttribute("font-size", fontSize);
+                } else {
+                    label.style.display = "none";
+                }
             }
             group.setAttribute(
                 "transform",
@@ -132,8 +167,8 @@
                 moved = true;
             }
             var point = toFeet(e.clientX, e.clientY);
-            newWidth = Math.max(1, Math.round(startWidth + (point.x - startFeet.x)));
-            newLength = Math.max(1, Math.round(startLength + (point.y - startFeet.y)));
+            newWidth = clamp(Math.round(startWidth + (point.x - startFeet.x)), 1, maxWidth);
+            newLength = clamp(Math.round(startLength + (point.y - startFeet.y)), 1, maxLength);
             applyDimensions(newWidth, newLength);
         }
 

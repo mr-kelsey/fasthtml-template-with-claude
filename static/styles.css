@@ -134,6 +134,22 @@ dialog#event-dialog {
     flex: 0 0 16rem;
 }
 
+.grid-line {
+    fill: none;
+    stroke: var(--pico-muted-border-color);
+    stroke-width: 0.02;
+}
+
+.grid-bg {
+    fill: url(#foot-grid);
+}
+
+.plot-boundary {
+    fill: none;
+    stroke: var(--pico-primary);
+    stroke-width: 0.15;
+}
+
 .bed-group {
     cursor: move;
 }
@@ -145,7 +161,6 @@ dialog#event-dialog {
 }
 
 .bed-label {
-    font-size: 0.6;
     fill: var(--pico-primary-inverse);
     pointer-events: none;
     user-select: none;
