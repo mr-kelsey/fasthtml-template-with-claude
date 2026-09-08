@@ -44,6 +44,13 @@ _EVENT_COLUMNS = (
 _RECURRING_EVENT_COLUMNS = "id, title, month, day, created_at"
 
 
+def add_column_if_not_exists(db_connection, table: str, column: str, coldef: str):
+    "SQLite's ALTER TABLE has no ADD COLUMN IF NOT EXISTS clause (unlike CREATE TABLE), so init_db() guards it here instead."
+    existing_columns = {row[1] for row in db_connection.execute(text(f"PRAGMA table_info({table})")).all()}
+    if column not in existing_columns:
+        db_connection.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {coldef}"))
+
+
 class _CoreDatabase:
     "Owns one SQLite engine, built from the given dotenv file. Tests build their own instance from .env.test."
 
@@ -62,9 +69,15 @@ class _CoreDatabase:
         return self._engine
 
     def init_db(self):
+        """Each SCHEMA_STATEMENTS entry is either a CREATE TABLE IF NOT EXISTS string, or a
+        (table, column, coldef) tuple for an additive column -- see add_column_if_not_exists.
+        """
         with self.engine.begin() as db_connection:
             for statement in self.SCHEMA_STATEMENTS:
-                db_connection.execute(text(statement))
+                if isinstance(statement, tuple):
+                    add_column_if_not_exists(db_connection, *statement)
+                else:
+                    db_connection.execute(text(statement))
 
     def list_notes(self):
         with self.engine.connect() as db_connection:

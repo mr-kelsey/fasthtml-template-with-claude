@@ -1,4 +1,6 @@
+import pytest
 from dotenv import dotenv_values
+from sqlalchemy import text
 
 import db
 
@@ -12,6 +14,40 @@ def test_app_and_test_env_files_configure_different_db_paths():
 def test_db_module_loaded_the_test_env_files_configured_path():
     test_db_path = dotenv_values(".env.test").get("DB_PATH")
     assert db.DB_PATH == test_db_path
+
+
+@pytest.fixture
+def probe_table():
+    "A scratch table for exercising the SCHEMA_STATEMENTS ADD COLUMN entry format without touching real schema."
+    with db.engine.begin() as db_connection:
+        db_connection.execute(text("CREATE TABLE _schema_evolution_probe (id INTEGER PRIMARY KEY)"))
+    yield "_schema_evolution_probe"
+    with db.engine.begin() as db_connection:
+        db_connection.execute(text("DROP TABLE _schema_evolution_probe"))
+
+
+def _probe_table_columns(probe_table):
+    with db.engine.connect() as db_connection:
+        return [row[1] for row in db_connection.execute(text(f"PRAGMA table_info({probe_table})")).all()]
+
+
+def test_init_db_adds_a_new_column_declared_as_a_schema_statements_tuple(monkeypatch, probe_table):
+    "Locks in the schema-evolution pattern later phases use to grow seed_varieties/plantings without a migration framework -- SQLite has no ADD COLUMN IF NOT EXISTS clause, so init_db() guards it itself via PRAGMA table_info."
+    monkeypatch.setattr(
+        db._instance, "SCHEMA_STATEMENTS", db._instance.SCHEMA_STATEMENTS + [(probe_table, "probe_col", "TEXT")]
+    )
+    db.init_db()
+    assert "probe_col" in _probe_table_columns(probe_table)
+
+
+def test_init_db_is_idempotent_when_the_added_column_already_exists(monkeypatch, probe_table):
+    "init_db() re-runs via the startup hook on every app boot, so a previously-applied ADD COLUMN entry must not raise the second time."
+    monkeypatch.setattr(
+        db._instance, "SCHEMA_STATEMENTS", db._instance.SCHEMA_STATEMENTS + [(probe_table, "probe_col", "TEXT")]
+    )
+    db.init_db()
+    db.init_db()
+    assert _probe_table_columns(probe_table).count("probe_col") == 1
 
 
 def test_list_notes_returns_empty_list_when_no_notes_exist():
