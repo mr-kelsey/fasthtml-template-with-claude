@@ -2,7 +2,7 @@ from datetime import date
 
 from fasthtml import common as fast
 
-from layout import layout
+from farm.layout import layout
 from farm.helpers import parse_optional_int, compute_window
 import db
 
