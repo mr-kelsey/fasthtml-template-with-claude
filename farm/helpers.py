@@ -23,6 +23,8 @@ NPK_FIELD_LABELS = {
 
 SUN_NEEDS_OPTIONS = ["full_sun", "partial_shade", "full_shade"]
 
+RELATION_OPTIONS = ["companion", "antagonist"]
+
 
 def parse_optional_int(value: str):
     "Returns (ok, int_or_none). ok is False when value is non-blank but not a valid integer."
@@ -134,6 +136,15 @@ def validate_sun_needs(value: str):
         return None, None
     if value not in SUN_NEEDS_OPTIONS:
         return None, f"Sun needs must be one of: {', '.join(SUN_NEEDS_OPTIONS)}."
+    return value, None
+
+
+def validate_relation(value: str):
+    "Returns (value, None) or (None, error_message). Unlike sun_needs, relation is required -- blank is an error."
+    if value is None or value.strip() == "":
+        return None, "Relation is required."
+    if value not in RELATION_OPTIONS:
+        return None, f"Relation must be one of: {', '.join(RELATION_OPTIONS)}."
     return value, None
 
 

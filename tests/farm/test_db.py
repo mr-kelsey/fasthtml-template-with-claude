@@ -168,6 +168,48 @@ def test_delete_nonexistent_seed_lot_is_a_noop():
     db.delete_seed_lot(999999)
 
 
+def test_list_companion_rules_returns_empty_list_when_none_exist():
+    assert db.list_companion_rules() == []
+
+
+def test_add_companion_rule_persists_plants_and_relation():
+    db.add_companion_rule("Tomato", "Basil", "companion")
+    rule = db.list_companion_rules()[0]
+    assert (rule["plant_a_common_name"], rule["plant_b_common_name"], rule["relation"]) == ("Tomato", "Basil", "companion")
+
+
+def test_add_companion_rule_persists_notes():
+    db.add_companion_rule("Tomato", "Fennel", "antagonist", notes="Fennel stunts tomato growth")
+    rule = db.list_companion_rules()[0]
+    assert rule["notes"] == "Fennel stunts tomato growth"
+
+
+def test_add_companion_rule_defaults_notes_to_none():
+    db.add_companion_rule("Tomato", "Basil", "companion")
+    assert db.list_companion_rules()[0]["notes"] is None
+
+
+def test_get_companion_rule_returns_matching_row():
+    db.add_companion_rule("Tomato", "Basil", "companion")
+    rule_id = db.list_companion_rules()[0]["id"]
+    assert db.get_companion_rule(rule_id)["plant_b_common_name"] == "Basil"
+
+
+def test_get_companion_rule_returns_none_when_not_found():
+    assert db.get_companion_rule(999999) is None
+
+
+def test_delete_companion_rule_removes_it():
+    db.add_companion_rule("Tomato", "Basil", "companion")
+    rule_id = db.list_companion_rules()[0]["id"]
+    db.delete_companion_rule(rule_id)
+    assert db.list_companion_rules() == []
+
+
+def test_delete_nonexistent_companion_rule_is_a_noop():
+    db.delete_companion_rule(999999)
+
+
 def test_list_plantings_returns_empty_list_when_none_exist():
     assert db.list_plantings() == []
 

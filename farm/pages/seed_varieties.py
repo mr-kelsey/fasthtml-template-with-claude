@@ -5,9 +5,11 @@ from farm.helpers import (
     parse_agronomic_fields,
     parse_soil_feeding_fields,
     validate_sun_needs,
+    validate_relation,
     format_day_range,
     format_npk,
     SUN_NEEDS_OPTIONS,
+    RELATION_OPTIONS,
 )
 import db
 
@@ -148,6 +150,38 @@ def _variety_row(variety):
     )
 
 
+def _companion_rule_form():
+    return fast.Form(
+        fast.Input(name="plant_a_common_name", placeholder="Plant A (common name)", required=True),
+        fast.Input(name="plant_b_common_name", placeholder="Plant B (common name)", required=True),
+        fast.Select(
+            fast.Option("Relation", value="", selected=True),
+            *[fast.Option(relation, value=relation) for relation in RELATION_OPTIONS],
+            name="relation",
+        ),
+        fast.Input(name="notes", placeholder="Notes (optional)"),
+        fast.Button("Add Rule", type="submit"),
+        method="post",
+        action="/companion-rules",
+    )
+
+
+def _companion_rule_row(rule):
+    return fast.Tr(
+        fast.Td(rule["plant_a_common_name"]),
+        fast.Td(rule["plant_b_common_name"]),
+        fast.Td(rule["relation"]),
+        fast.Td(rule["notes"] or ""),
+        fast.Td(
+            fast.Form(
+                fast.Button("Delete", type="submit"),
+                method="post",
+                action=f"/companion-rules/{rule['id']}/delete",
+            )
+        ),
+    )
+
+
 @router("/seed-varieties", methods=["get"])
 def list_seed_varieties_page():
     varieties = db.list_seed_varieties()
@@ -165,6 +199,17 @@ def list_seed_varieties_page():
         fast.Thead(fast.Tr(*[fast.Th(h) for h in headers])),
         fast.Tbody(*rows),
     )
+    rules = db.list_companion_rules()
+    rule_headers = ["Plant A", "Plant B", "Relation", "Notes", ""]
+    rule_rows = (
+        [_companion_rule_row(r) for r in rules]
+        if rules
+        else [fast.Tr(fast.Td("No companion/antagonist rules yet.", colspan=str(len(rule_headers))))]
+    )
+    rule_table = fast.Table(
+        fast.Thead(fast.Tr(*[fast.Th(h) for h in rule_headers])),
+        fast.Tbody(*rule_rows),
+    )
     return layout(
         "Seed Varieties",
         fast.H1("Seed Varieties"),
@@ -172,6 +217,9 @@ def list_seed_varieties_page():
         _variety_form(action="/seed-varieties", submit_label="Add Variety"),
         fast.H2("All varieties"),
         table,
+        fast.H2("Companion / Antagonist Rules"),
+        _companion_rule_form(),
+        rule_table,
     )
 
 
@@ -331,4 +379,23 @@ def update_seed_variety_route(
 @router("/seed-varieties/{variety_id}/delete", methods=["post"])
 def delete_seed_variety_route(variety_id: int):
     db.delete_seed_variety(variety_id)
+    return fast.Redirect("/seed-varieties")
+
+
+@router("/companion-rules", methods=["post"])
+def add_companion_rule_route(plant_a_common_name: str, plant_b_common_name: str, relation: str, notes: str = ""):
+    plant_a_common_name = plant_a_common_name.strip()
+    plant_b_common_name = plant_b_common_name.strip()
+    if not plant_a_common_name or not plant_b_common_name:
+        return fast.Response("Both plant common names are required.", status_code=422)
+    relation_value, error = validate_relation(relation)
+    if error:
+        return fast.Response(error, status_code=422)
+    db.add_companion_rule(plant_a_common_name, plant_b_common_name, relation_value, notes=notes.strip() or None)
+    return fast.Redirect("/seed-varieties")
+
+
+@router("/companion-rules/{rule_id}/delete", methods=["post"])
+def delete_companion_rule_route(rule_id: int):
+    db.delete_companion_rule(rule_id)
     return fast.Redirect("/seed-varieties")

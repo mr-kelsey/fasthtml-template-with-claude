@@ -59,6 +59,16 @@ SCHEMA_STATEMENTS = [
     """,
     ("plantings", "seed_lot_id", "INTEGER"),
     """
+    CREATE TABLE IF NOT EXISTS companion_rules (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        plant_a_common_name TEXT NOT NULL,
+        plant_b_common_name TEXT NOT NULL,
+        relation TEXT NOT NULL CHECK (relation IN ('companion', 'antagonist')),
+        notes TEXT,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
+    """,
+    """
     CREATE TABLE IF NOT EXISTS land_plots (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT NOT NULL,
@@ -116,6 +126,8 @@ _PLANTING_COLUMNS = (
 )
 
 _SEED_LOT_COLUMNS = "id, variety_id, quantity_on_hand, acquired_date, seed_source, notes, created_at"
+
+_COMPANION_RULE_COLUMNS = "id, plant_a_common_name, plant_b_common_name, relation, notes, created_at"
 
 _LAND_PLOT_COLUMNS = "id, name, width_ft, length_ft, created_at"
 
@@ -388,6 +400,39 @@ class FarmDatabaseMixin:
     def delete_seed_lot(self, seed_lot_id: int):
         with self.engine.begin() as db_connection:
             db_connection.execute(text("DELETE FROM seed_lots WHERE id = :id"), {"id": seed_lot_id})
+
+    def list_companion_rules(self):
+        with self.engine.connect() as db_connection:
+            return db_connection.execute(
+                text(
+                    f"SELECT {_COMPANION_RULE_COLUMNS} FROM companion_rules "
+                    "ORDER BY plant_a_common_name, plant_b_common_name"
+                )
+            ).mappings().all()
+
+    def get_companion_rule(self, rule_id: int):
+        with self.engine.connect() as db_connection:
+            return db_connection.execute(
+                text(f"SELECT {_COMPANION_RULE_COLUMNS} FROM companion_rules WHERE id = :id"),
+                {"id": rule_id},
+            ).mappings().first()
+
+    def add_companion_rule(self, plant_a_common_name: str, plant_b_common_name: str, relation: str, notes: str = None):
+        with self.engine.begin() as db_connection:
+            db_connection.execute(
+                text(
+                    "INSERT INTO companion_rules (plant_a_common_name, plant_b_common_name, relation, notes) "
+                    "VALUES (:plant_a_common_name, :plant_b_common_name, :relation, :notes)"
+                ),
+                {
+                    "plant_a_common_name": plant_a_common_name, "plant_b_common_name": plant_b_common_name,
+                    "relation": relation, "notes": notes or None,
+                },
+            )
+
+    def delete_companion_rule(self, rule_id: int):
+        with self.engine.begin() as db_connection:
+            db_connection.execute(text("DELETE FROM companion_rules WHERE id = :id"), {"id": rule_id})
 
     def list_plantings(self):
         "Joined with seed_varieties so callers get the variety's common name and maturity data for expected-window math."

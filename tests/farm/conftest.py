@@ -25,6 +25,16 @@ def _clean_plantings():
 
 
 @pytest.fixture(autouse=True)
+def _clean_companion_rules():
+    "Start and end each test with an empty companion_rules table (no FK to any other farm table)."
+    with db.engine.begin() as db_connection:
+        db_connection.execute(text("DELETE FROM companion_rules"))
+    yield
+    with db.engine.begin() as db_connection:
+        db_connection.execute(text("DELETE FROM companion_rules"))
+
+
+@pytest.fixture(autouse=True)
 def _clean_seed_lots():
     "Start and end each test with an empty seed_lots table (cleaned before seed_varieties, its parent)."
     with db.engine.begin() as db_connection:

@@ -230,6 +230,83 @@ def test_submitting_duplicated_variety_creates_a_second_row(client):
     assert len(db.list_seed_varieties()) == 2
 
 
+def test_seed_varieties_page_shows_no_companion_rules_yet_when_none_exist(client):
+    response = client.get("/seed-varieties")
+    assert "No companion/antagonist rules yet" in response.text
+
+
+def test_add_companion_rule_redirects_with_303(client):
+    response = client.post(
+        "/companion-rules",
+        data={"plant_a_common_name": "Tomato", "plant_b_common_name": "Basil", "relation": "companion"},
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+
+
+def test_add_companion_rule_appears_in_list(client):
+    client.post(
+        "/companion-rules",
+        data={"plant_a_common_name": "Tomato", "plant_b_common_name": "Basil", "relation": "companion"},
+    )
+    response = client.get("/seed-varieties")
+    assert "Tomato" in response.text and "Basil" in response.text
+
+
+def test_add_companion_rule_persists_notes(client):
+    client.post(
+        "/companion-rules",
+        data={
+            "plant_a_common_name": "Tomato", "plant_b_common_name": "Fennel", "relation": "antagonist",
+            "notes": "Fennel stunts tomato growth",
+        },
+    )
+    response = client.get("/seed-varieties")
+    assert "Fennel stunts tomato growth" in response.text
+
+
+def test_add_companion_rule_rejects_blank_plant_a_name(client):
+    response = client.post(
+        "/companion-rules",
+        data={"plant_a_common_name": "", "plant_b_common_name": "Basil", "relation": "companion"},
+    )
+    assert response.status_code == 422
+
+
+def test_add_companion_rule_rejects_blank_plant_b_name(client):
+    response = client.post(
+        "/companion-rules",
+        data={"plant_a_common_name": "Tomato", "plant_b_common_name": "", "relation": "companion"},
+    )
+    assert response.status_code == 422
+
+
+def test_add_companion_rule_rejects_blank_relation(client):
+    response = client.post(
+        "/companion-rules",
+        data={"plant_a_common_name": "Tomato", "plant_b_common_name": "Basil", "relation": ""},
+    )
+    assert response.status_code == 422
+
+
+def test_add_companion_rule_rejects_invalid_relation(client):
+    response = client.post(
+        "/companion-rules",
+        data={"plant_a_common_name": "Tomato", "plant_b_common_name": "Basil", "relation": "frenemy"},
+    )
+    assert response.status_code == 422
+
+
+def test_delete_companion_rule_removes_it(client):
+    client.post(
+        "/companion-rules",
+        data={"plant_a_common_name": "Tomato", "plant_b_common_name": "Basil", "relation": "companion"},
+    )
+    rule_id = db.list_companion_rules()[0]["id"]
+    client.post(f"/companion-rules/{rule_id}/delete")
+    assert db.list_companion_rules() == []
+
+
 def _create_variety(client, common_name="Tomato", variety_name="Cherokee Purple", plant_family="Solanaceae", **variety_fields):
     client.post(
         "/seed-varieties",
