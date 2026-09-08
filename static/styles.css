@@ -222,30 +222,106 @@ dialog#bed-dialog {
     width: 100%;
 }
 
-.bed-grid {
-    display: grid;
-    gap: 2px;
-    max-width: 40rem;
+.bed-detail-layout {
+    display: flex;
+    gap: 1.5rem;
+    align-items: flex-start;
 }
 
-.bed-cell {
-    aspect-ratio: 1;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    text-align: center;
-    font-size: 0.7rem;
-    padding: 0.25rem;
+.bed-detail-svg {
+    display: block;
+    width: 100%;
+    max-width: 40rem;
+    height: 60vh;
     border: 1px solid var(--pico-muted-border-color);
+    border-radius: var(--pico-border-radius);
+    background-color: var(--pico-card-sectioning-background-color);
+}
+
+.bed-detail-sidebar {
+    flex: 0 0 18rem;
+}
+
+.grid-line-detail {
+    fill: none;
+    stroke: var(--pico-muted-border-color);
+    stroke-width: 0.3;
+}
+
+.grid-bg-detail {
+    fill: url(#inch-foot-grid);
+}
+
+.bed-boundary {
+    fill: none;
+    stroke: var(--pico-primary);
+    stroke-width: 1;
+}
+
+.planting-dot {
+    stroke: var(--pico-color);
+    stroke-width: 0.3;
+}
+
+.planting-dot.staged {
+    stroke-dasharray: 1, 1;
+}
+
+.planting-dot.companion {
+    stroke: #2ecc40;
+    stroke-width: 1;
+    stroke-opacity: 0.7;
+}
+
+.planting-dot.antagonist {
+    stroke: #ff4136;
+    stroke-width: 1;
+    stroke-opacity: 0.7;
+}
+
+.lattice-point {
+    fill: var(--pico-muted-border-color);
     cursor: pointer;
 }
 
-.bed-cell.occupied {
-    background: var(--pico-primary-background);
-    color: var(--pico-primary-inverse);
+.lattice-point.blocked {
+    fill: #ff4136;
+    fill-opacity: 0.35;
+    cursor: not-allowed;
 }
 
-dialog#cell-dialog {
-    max-width: 28rem;
-    width: 100%;
+.variety-palette {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+}
+
+/* button.variety-palette-item (not just .variety-palette-item) -- styles.css loads before Pico's own
+   stylesheet (see layout.py), so a plain class selector loses cascade ties to Pico's button rules;
+   qualifying with the element name gives this enough specificity to win regardless of load order. */
+button.variety-palette-item {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    background: none;
+    border: 1px solid var(--pico-muted-border-color);
+    /* not var(--pico-color) -- Pico's own button rule locally redefines that custom property to
+       --pico-primary-inverse (white, for its default filled-button look), and a plain var()
+       reference here would just read that same shadowed value back. inherit sidesteps it by
+       reading the surrounding page text color instead. */
+    color: inherit;
+    text-align: left;
+}
+
+button.variety-palette-item.armed {
+    border-color: var(--pico-primary);
+    background: var(--pico-primary-background);
+}
+
+.variety-swatch {
+    display: inline-block;
+    width: 1rem;
+    height: 1rem;
+    border-radius: 50%;
+    flex: 0 0 auto;
 }

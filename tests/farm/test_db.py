@@ -844,28 +844,6 @@ def test_list_plantings_for_bed_excludes_plantings_in_other_beds():
     assert db.list_plantings_for_bed(bed_id) == []
 
 
-def test_list_plantings_at_cell_returns_matching_planting():
-    variety_id = _add_variety()
-    bed_id = _add_bed()
-    planting_id = db.add_planting(variety_id, "2026-05-01", bed_id=bed_id, x_in=12, y_in=24)
-    assert db.list_plantings_at_cell(bed_id, 1, 2)[0]["id"] == planting_id
-
-
-def test_list_plantings_at_cell_returns_empty_list_when_empty():
-    bed_id = _add_bed()
-    assert db.list_plantings_at_cell(bed_id, 1, 2) == []
-
-
-def test_list_plantings_at_cell_returns_multiple_interplanted_varieties():
-    "A cell can hold more than one planting -- e.g. interplanting carrots and tomatoes in the same square."
-    variety_a = _add_variety(common_name="Tomato", variety_name="Cherokee Purple")
-    variety_b = _add_variety(common_name="Carrot", variety_name="Danvers")
-    bed_id = _add_bed()
-    db.add_planting(variety_a, "2026-05-01", bed_id=bed_id, x_in=0, y_in=0)
-    db.add_planting(variety_b, "2026-05-01", bed_id=bed_id, x_in=0, y_in=0)
-    assert len(db.list_plantings_at_cell(bed_id, 0, 0)) == 2
-
-
 def test_interplanted_cell_generates_separate_events_per_variety():
     variety_a = _add_variety(
         common_name="Tomato", variety_name="Cherokee Purple", days_to_maturity_min=60, days_to_maturity_max=70
@@ -877,3 +855,156 @@ def test_interplanted_cell_generates_separate_events_per_variety():
     db.add_planting(variety_a, "2026-05-01", bed_id=bed_id, x_in=0, y_in=0)
     db.add_planting(variety_b, "2026-05-01", bed_id=bed_id, x_in=0, y_in=0)
     assert len(db.list_farm_events_in_range(*ALL_TIME)) == 2
+
+
+def test_add_seed_variety_persists_color_hex():
+    db.add_seed_variety("Tomato", "Cherokee Purple", "Solanaceae", color_hex="#e6194b")
+    assert db.list_seed_varieties()[0]["color_hex"] == "#e6194b"
+
+
+def test_update_seed_variety_changes_color_hex():
+    variety_id = _add_variety()
+    db.update_seed_variety(variety_id, "Tomato", "Cherokee Purple", "Solanaceae", color_hex="#3cb44b")
+    assert db.get_seed_variety(variety_id)["color_hex"] == "#3cb44b"
+
+
+def test_add_planting_persists_soil_temp_f():
+    variety_id = _add_variety()
+    db.add_planting(variety_id, "2026-05-01", soil_temp_f=65.5)
+    assert db.get_planting(db.list_plantings()[0]["id"])["soil_temp_f"] == 65.5
+
+
+def test_update_planting_changes_soil_temp_f():
+    variety_id = _add_variety()
+    planting_id = db.add_planting(variety_id, "2026-05-01")
+    db.update_planting(planting_id, variety_id, "2026-05-01", soil_temp_f=70.0)
+    assert db.get_planting(planting_id)["soil_temp_f"] == 70.0
+
+
+def test_list_seed_varieties_with_seed_stock_includes_variety_with_any_lot():
+    variety_id = _add_variety()
+    db.add_seed_lot(variety_id, quantity_on_hand=0)
+    assert [v["id"] for v in db.list_seed_varieties_with_seed_stock()] == [variety_id]
+
+
+def test_list_seed_varieties_with_seed_stock_excludes_variety_without_a_lot():
+    _add_variety()
+    assert db.list_seed_varieties_with_seed_stock() == []
+
+
+def test_list_seed_varieties_with_transplant_stock_includes_variety_with_positive_quantity():
+    variety_id = _add_variety()
+    db.add_transplant_lot(variety_id, quantity_on_hand=5)
+    assert [v["id"] for v in db.list_seed_varieties_with_transplant_stock()] == [variety_id]
+
+
+def test_list_seed_varieties_with_transplant_stock_excludes_zero_quantity_lot():
+    variety_id = _add_variety()
+    db.add_transplant_lot(variety_id, quantity_on_hand=0)
+    assert db.list_seed_varieties_with_transplant_stock() == []
+
+
+def test_list_available_transplant_lots_for_variety_excludes_zero_quantity_lot():
+    variety_id = _add_variety()
+    db.add_transplant_lot(variety_id, quantity_on_hand=0)
+    assert db.list_available_transplant_lots_for_variety(variety_id) == []
+
+
+def test_list_available_transplant_lots_for_variety_includes_positive_quantity_lot():
+    variety_id = _add_variety()
+    db.add_transplant_lot(variety_id, quantity_on_hand=3)
+    lot_id = db.list_transplant_lots_for_variety(variety_id)[0]["id"]
+    assert [lot["id"] for lot in db.list_available_transplant_lots_for_variety(variety_id)] == [lot_id]
+
+
+def test_update_transplant_lot_quantity_changes_only_quantity():
+    variety_id = _add_variety()
+    db.add_transplant_lot(variety_id, quantity_on_hand=10, purchased_vendor="Local Nursery")
+    lot_id = db.list_transplant_lots_for_variety(variety_id)[0]["id"]
+    db.update_transplant_lot_quantity(lot_id, 6)
+    lot = db.get_transplant_lot(lot_id)
+    assert (lot["quantity_on_hand"], lot["purchased_vendor"]) == (6, "Local Nursery")
+
+
+def test_list_plantings_by_transplant_lot_returns_matching_plantings():
+    variety_id = _add_variety()
+    bed_id = _add_bed()
+    db.add_transplant_lot(variety_id, quantity_on_hand=5)
+    lot_id = db.list_transplant_lots_for_variety(variety_id)[0]["id"]
+    planting_ids = db.batch_add_plantings(
+        variety_id, "2026-05-01", bed_id, "transplant", [(0, 0), (16, 0)], transplant_lot_id=lot_id
+    )
+    assert sorted(p["id"] for p in db.list_plantings_by_transplant_lot(lot_id)) == sorted(planting_ids)
+
+
+def test_list_plantings_by_transplant_lot_excludes_other_lots():
+    variety_id = _add_variety()
+    db.add_transplant_lot(variety_id, quantity_on_hand=5)
+    lot_id = db.list_transplant_lots_for_variety(variety_id)[0]["id"]
+    assert db.list_plantings_by_transplant_lot(lot_id) == []
+
+
+def test_batch_add_plantings_creates_one_row_per_point():
+    variety_id = _add_variety()
+    bed_id = _add_bed()
+    db.batch_add_plantings(variety_id, "2026-05-01", bed_id, "seed", [(0, 0), (16, 0), (32, 0)])
+    assert len(db.list_plantings_for_bed(bed_id)) == 3
+
+
+def test_batch_add_plantings_sets_quantity_one_per_point():
+    variety_id = _add_variety()
+    bed_id = _add_bed()
+    db.batch_add_plantings(variety_id, "2026-05-01", bed_id, "seed", [(0, 0)])
+    assert db.list_plantings_for_bed(bed_id)[0]["quantity"] == 1
+
+def test_batch_add_plantings_returns_new_planting_ids():
+    variety_id = _add_variety()
+    bed_id = _add_bed()
+    ids = db.batch_add_plantings(variety_id, "2026-05-01", bed_id, "seed", [(0, 0), (16, 0)])
+    assert len(ids) == 2
+
+
+def test_batch_add_plantings_decrements_transplant_lot_by_batch_count():
+    variety_id = _add_variety()
+    bed_id = _add_bed()
+    db.add_transplant_lot(variety_id, quantity_on_hand=10)
+    lot_id = db.list_transplant_lots_for_variety(variety_id)[0]["id"]
+    db.batch_add_plantings(
+        variety_id, "2026-05-01", bed_id, "transplant", [(0, 0), (16, 0)], transplant_lot_id=lot_id
+    )
+    assert db.get_transplant_lot(lot_id)["quantity_on_hand"] == 8
+
+
+def test_batch_add_plantings_leaves_seed_lot_untouched():
+    "Existence-only gating for seed mode -- batch planting never decrements a seed_lots quantity."
+    variety_id = _add_variety()
+    bed_id = _add_bed()
+    db.add_seed_lot(variety_id, quantity_on_hand=50)
+    lot_id = db.list_seed_lots_for_variety(variety_id)[0]["id"]
+    db.batch_add_plantings(variety_id, "2026-05-01", bed_id, "seed", [(0, 0)])
+    assert db.get_seed_lot(lot_id)["quantity_on_hand"] == 50
+
+
+def test_batch_add_plantings_regenerates_bed_farm_events_once():
+    variety_id = _add_variety(days_to_maturity_min=60, days_to_maturity_max=70)
+    bed_id = _add_bed()
+    db.batch_add_plantings(variety_id, "2026-05-01", bed_id, "seed", [(0, 0), (12, 0), (24, 0)])
+    assert len(db.list_farm_events_in_range(*ALL_TIME)) == 1
+
+
+def test_batch_add_plantings_persists_source_type():
+    variety_id = _add_variety()
+    bed_id = _add_bed()
+    db.add_transplant_lot(variety_id, quantity_on_hand=5)
+    lot_id = db.list_transplant_lots_for_variety(variety_id)[0]["id"]
+    db.batch_add_plantings(variety_id, "2026-05-01", bed_id, "transplant", [(0, 0)], transplant_lot_id=lot_id)
+    assert db.list_plantings_for_bed(bed_id)[0]["source_type"] == "transplant"
+
+
+def test_batch_add_plantings_second_batch_of_same_variety_and_date_merges_into_shared_event():
+    "Batching by submission is a UI convenience only -- separate batches share the (variety, date) grouping."
+    variety_id = _add_variety(days_to_maturity_min=60, days_to_maturity_max=70)
+    bed_id = _add_bed()
+    db.batch_add_plantings(variety_id, "2026-05-01", bed_id, "seed", [(0, 0), (12, 0)])
+    db.batch_add_plantings(variety_id, "2026-05-01", bed_id, "seed", [(24, 0)])
+    assert len(db.list_farm_events_in_range(*ALL_TIME)) == 1

@@ -1,3 +1,4 @@
+import json
 from datetime import date
 
 import db
@@ -921,174 +922,242 @@ def test_bed_detail_page_shows_bed_label(client):
     assert "Tomato Bed" in response.text
 
 
-def test_bed_detail_page_renders_one_cell_per_square_foot(client):
-    plot_id = _create_plot(client)
-    bed_id = _create_bed(client, plot_id, width_ft="2", length_ft="3")
-    response = client.get(f"/beds/{bed_id}")
-    assert response.text.count("bed-cell") == 6
+def _stage_batch(client, bed_id, variety_id, points, source_type="seed", planted_date="2026-05-01", follow_redirects=True, **extra):
+    return client.post(
+        f"/beds/{bed_id}/cells/batch",
+        data={
+            "variety_id": str(variety_id),
+            "source_type": source_type,
+            "planted_date": planted_date,
+            "points": json.dumps([{"x_in": x, "y_in": y} for x, y in points]),
+            **extra,
+        },
+        follow_redirects=follow_redirects,
+    )
 
 
-def test_assign_cell_redirects_with_303(client):
+def test_bed_detail_page_shows_seed_stock_variety_in_seed_palette(client):
     plot_id = _create_plot(client)
     bed_id = _create_bed(client, plot_id)
     variety_id = _create_variety(client)
-    response = client.post(
-        f"/beds/{bed_id}/cells/0/0",
-        data={"variety_id": str(variety_id), "planted_date": "2026-05-01"},
-        follow_redirects=False,
-    )
+    client.post("/seed-lots", data={"variety_id": str(variety_id)})
+    response = client.get(f"/beds/{bed_id}")
+    assert "Cherokee Purple" in response.text
+
+
+def test_bed_detail_page_omits_variety_with_no_stock(client):
+    plot_id = _create_plot(client)
+    bed_id = _create_bed(client, plot_id)
+    _create_variety(client)
+    response = client.get(f"/beds/{bed_id}")
+    assert "No varieties with seed stock on hand" in response.text
+
+
+def test_bed_detail_page_omits_transplant_variety_with_zero_quantity(client):
+    plot_id = _create_plot(client)
+    bed_id = _create_bed(client, plot_id)
+    variety_id = _create_variety(client)
+    client.post("/transplant-lots", data={"variety_id": str(variety_id), "quantity_on_hand": "0"})
+    response = client.get(f"/beds/{bed_id}")
+    assert "No varieties with transplant stock on hand" in response.text
+
+
+def test_batch_plant_redirects_with_303(client):
+    plot_id = _create_plot(client)
+    bed_id = _create_bed(client, plot_id)
+    variety_id = _create_variety(client)
+    client.post("/seed-lots", data={"variety_id": str(variety_id)})
+    response = _stage_batch(client, bed_id, variety_id, [(0, 0), (16, 0)], follow_redirects=False)
     assert response.status_code == 303
 
 
-def test_assign_cell_persists_planting_at_that_cell(client):
+def test_batch_plant_persists_one_planting_per_point(client):
     plot_id = _create_plot(client)
     bed_id = _create_bed(client, plot_id)
     variety_id = _create_variety(client)
-    client.post(f"/beds/{bed_id}/cells/1/2", data={"variety_id": str(variety_id), "planted_date": "2026-05-01"})
-    assert db.list_plantings_at_cell(bed_id, 1, 2)[0]["variety_id"] == variety_id
+    client.post("/seed-lots", data={"variety_id": str(variety_id)})
+    _stage_batch(client, bed_id, variety_id, [(0, 0), (16, 0), (32, 0)])
+    assert len(db.list_plantings_for_bed(bed_id)) == 3
 
 
-def test_assign_cell_shows_variety_on_bed_detail_page(client):
+def test_batch_plant_persists_submitted_positions(client):
     plot_id = _create_plot(client)
     bed_id = _create_bed(client, plot_id)
     variety_id = _create_variety(client)
-    client.post(f"/beds/{bed_id}/cells/0/0", data={"variety_id": str(variety_id), "planted_date": "2026-05-01"})
-    response = client.get(f"/beds/{bed_id}")
-    assert "Cherokee Purple" in response.text
+    client.post("/seed-lots", data={"variety_id": str(variety_id)})
+    _stage_batch(client, bed_id, variety_id, [(16, 24)])
+    planting = db.list_plantings_for_bed(bed_id)[0]
+    assert (planting["x_in"], planting["y_in"]) == (16, 24)
 
 
-def test_assign_cell_rejects_unknown_variety(client):
-    plot_id = _create_plot(client)
-    bed_id = _create_bed(client, plot_id)
-    response = client.post(f"/beds/{bed_id}/cells/0/0", data={"variety_id": "999999", "planted_date": "2026-05-01"})
-    assert response.status_code == 422
-
-
-def test_assign_cell_rejects_malformed_planted_date(client):
-    plot_id = _create_plot(client)
-    bed_id = _create_bed(client, plot_id)
-    variety_id = _create_variety(client)
-    response = client.post(
-        f"/beds/{bed_id}/cells/0/0", data={"variety_id": str(variety_id), "planted_date": "not-a-date"}
-    )
-    assert response.status_code == 422
-
-
-def test_assign_cell_rejects_coordinate_outside_bed(client):
+def test_batch_plant_rejects_point_outside_bed(client):
     plot_id = _create_plot(client)
     bed_id = _create_bed(client, plot_id, width_ft="4", length_ft="8")
     variety_id = _create_variety(client)
-    response = client.post(
-        f"/beds/{bed_id}/cells/10/0", data={"variety_id": str(variety_id), "planted_date": "2026-05-01"}
+    client.post("/seed-lots", data={"variety_id": str(variety_id)})
+    response = _stage_batch(client, bed_id, variety_id, [(1000, 0)])
+    assert response.status_code == 422
+
+
+def test_batch_plant_rejects_unknown_variety(client):
+    plot_id = _create_plot(client)
+    bed_id = _create_bed(client, plot_id)
+    response = _stage_batch(client, bed_id, 999999, [(0, 0)])
+    assert response.status_code == 422
+
+
+def test_batch_plant_rejects_seed_mode_variety_with_no_seed_lot(client):
+    plot_id = _create_plot(client)
+    bed_id = _create_bed(client, plot_id)
+    variety_id = _create_variety(client)
+    response = _stage_batch(client, bed_id, variety_id, [(0, 0)])
+    assert response.status_code == 422
+
+
+def test_batch_plant_returns_404_when_bed_not_found(client):
+    variety_id = _create_variety(client)
+    response = _stage_batch(client, 999999, variety_id, [(0, 0)])
+    assert response.status_code == 404
+
+
+def test_batch_plant_transplant_mode_rejects_count_exceeding_lot_quantity(client):
+    plot_id = _create_plot(client)
+    bed_id = _create_bed(client, plot_id)
+    variety_id = _create_variety(client)
+    client.post("/transplant-lots", data={"variety_id": str(variety_id), "quantity_on_hand": "1"})
+    lot_id = db.list_transplant_lots()[0]["id"]
+    response = _stage_batch(
+        client, bed_id, variety_id, [(0, 0), (16, 0)], source_type="transplant", transplant_lot_id=str(lot_id)
     )
     assert response.status_code == 422
 
 
-def test_assign_cell_returns_404_when_bed_not_found(client):
+def test_batch_plant_transplant_mode_decrements_lot(client):
+    plot_id = _create_plot(client)
+    bed_id = _create_bed(client, plot_id)
     variety_id = _create_variety(client)
-    response = client.post(
-        "/beds/999999/cells/0/0", data={"variety_id": str(variety_id), "planted_date": "2026-05-01"}
+    client.post("/transplant-lots", data={"variety_id": str(variety_id), "quantity_on_hand": "5"})
+    lot_id = db.list_transplant_lots()[0]["id"]
+    _stage_batch(
+        client, bed_id, variety_id, [(0, 0), (16, 0)], source_type="transplant", transplant_lot_id=str(lot_id)
     )
+    assert db.get_transplant_lot(lot_id)["quantity_on_hand"] == 3
+
+
+def test_batch_plant_transplant_mode_records_source_type(client):
+    plot_id = _create_plot(client)
+    bed_id = _create_bed(client, plot_id)
+    variety_id = _create_variety(client)
+    client.post("/transplant-lots", data={"variety_id": str(variety_id), "quantity_on_hand": "5"})
+    lot_id = db.list_transplant_lots()[0]["id"]
+    _stage_batch(client, bed_id, variety_id, [(0, 0)], source_type="transplant", transplant_lot_id=str(lot_id))
+    assert db.list_plantings_for_bed(bed_id)[0]["source_type"] == "transplant"
+
+
+def test_batch_plant_transplant_mode_rejects_missing_lot(client):
+    plot_id = _create_plot(client)
+    bed_id = _create_bed(client, plot_id)
+    variety_id = _create_variety(client)
+    response = _stage_batch(client, bed_id, variety_id, [(0, 0)], source_type="transplant")
+    assert response.status_code == 422
+
+
+def test_update_transplant_lot_quantity_route_returns_204(client):
+    variety_id = _create_variety(client)
+    client.post("/transplant-lots", data={"variety_id": str(variety_id), "quantity_on_hand": "5"})
+    lot_id = db.list_transplant_lots()[0]["id"]
+    response = client.post(f"/transplant-lots/{lot_id}/quantity", data={"quantity_on_hand": "2"})
+    assert response.status_code == 204
+
+
+def test_update_transplant_lot_quantity_route_persists_new_quantity(client):
+    variety_id = _create_variety(client)
+    client.post("/transplant-lots", data={"variety_id": str(variety_id), "quantity_on_hand": "5"})
+    lot_id = db.list_transplant_lots()[0]["id"]
+    client.post(f"/transplant-lots/{lot_id}/quantity", data={"quantity_on_hand": "2"})
+    assert db.get_transplant_lot(lot_id)["quantity_on_hand"] == 2
+
+
+def test_update_transplant_lot_quantity_route_returns_404_when_not_found(client):
+    response = client.post("/transplant-lots/999999/quantity", data={"quantity_on_hand": "2"})
     assert response.status_code == 404
 
 
-def test_assigning_a_second_variety_to_an_occupied_cell_keeps_both(client):
-    "Interplanting -- a cell can hold more than one type of plant."
-    plot_id = _create_plot(client)
-    bed_id = _create_bed(client, plot_id)
-    variety_a = _create_variety(client, common_name="Tomato", variety_name="Cherokee Purple")
-    variety_b = _create_variety(client, common_name="Carrot", variety_name="Danvers")
-    client.post(f"/beds/{bed_id}/cells/0/0", data={"variety_id": str(variety_a), "planted_date": "2026-05-01"})
-    client.post(f"/beds/{bed_id}/cells/0/0", data={"variety_id": str(variety_b), "planted_date": "2026-05-01"})
-    assert len(db.list_plantings_at_cell(bed_id, 0, 0)) == 2
-
-
-def test_bed_detail_page_shows_both_interplanted_varieties(client):
-    plot_id = _create_plot(client)
-    bed_id = _create_bed(client, plot_id)
-    variety_a = _create_variety(client, common_name="Tomato", variety_name="Cherokee Purple")
-    variety_b = _create_variety(client, common_name="Carrot", variety_name="Danvers")
-    client.post(f"/beds/{bed_id}/cells/0/0", data={"variety_id": str(variety_a), "planted_date": "2026-05-01"})
-    client.post(f"/beds/{bed_id}/cells/0/0", data={"variety_id": str(variety_b), "planted_date": "2026-05-01"})
-    response = client.get(f"/beds/{bed_id}")
-    assert "Cherokee Purple" in response.text and "Danvers" in response.text
-
-
-def test_clear_cell_removes_the_planting(client):
-    plot_id = _create_plot(client)
-    bed_id = _create_bed(client, plot_id)
+def test_update_transplant_lot_quantity_route_rejects_negative_quantity(client):
     variety_id = _create_variety(client)
-    client.post(f"/beds/{bed_id}/cells/0/0", data={"variety_id": str(variety_id), "planted_date": "2026-05-01"})
-    client.post(f"/beds/{bed_id}/cells/0/0/clear")
-    assert db.list_plantings_at_cell(bed_id, 0, 0) == []
+    client.post("/transplant-lots", data={"variety_id": str(variety_id), "quantity_on_hand": "5"})
+    lot_id = db.list_transplant_lots()[0]["id"]
+    response = client.post(f"/transplant-lots/{lot_id}/quantity", data={"quantity_on_hand": "-1"})
+    assert response.status_code == 422
 
 
-def test_clear_cell_removes_every_interplanted_variety(client):
-    plot_id = _create_plot(client)
-    bed_id = _create_bed(client, plot_id)
-    variety_a = _create_variety(client, common_name="Tomato", variety_name="Cherokee Purple")
-    variety_b = _create_variety(client, common_name="Carrot", variety_name="Danvers")
-    client.post(f"/beds/{bed_id}/cells/0/0", data={"variety_id": str(variety_a), "planted_date": "2026-05-01"})
-    client.post(f"/beds/{bed_id}/cells/0/0", data={"variety_id": str(variety_b), "planted_date": "2026-05-01"})
-    client.post(f"/beds/{bed_id}/cells/0/0/clear")
-    assert db.list_plantings_at_cell(bed_id, 0, 0) == []
-
-
-def test_clear_empty_cell_is_a_noop(client):
-    plot_id = _create_plot(client)
-    bed_id = _create_bed(client, plot_id)
-    response = client.post(f"/beds/{bed_id}/cells/0/0/clear")
+def test_transplant_lot_plantings_page_returns_200(client):
+    variety_id = _create_variety(client)
+    client.post("/transplant-lots", data={"variety_id": str(variety_id)})
+    lot_id = db.list_transplant_lots()[0]["id"]
+    response = client.get(f"/transplant-lots/{lot_id}/plantings")
     assert response.status_code == 200
 
 
-def test_cell_edit_fragment_lists_existing_planting_for_occupied_cell(client):
+def test_transplant_lot_plantings_page_returns_404_when_not_found(client):
+    response = client.get("/transplant-lots/999999/plantings")
+    assert response.status_code == 404
+
+
+def test_transplant_lot_plantings_page_lists_plantings_drawn_from_it(client):
     plot_id = _create_plot(client)
     bed_id = _create_bed(client, plot_id)
     variety_id = _create_variety(client)
-    client.post(f"/beds/{bed_id}/cells/0/0", data={"variety_id": str(variety_id), "planted_date": "2026-05-01"})
-    response = client.get(f"/beds/{bed_id}/cells/0/0/edit-fragment")
-    assert "Cherokee Purple" in response.text
+    client.post("/transplant-lots", data={"variety_id": str(variety_id), "quantity_on_hand": "5"})
+    lot_id = db.list_transplant_lots()[0]["id"]
+    _stage_batch(client, bed_id, variety_id, [(0, 0)], source_type="transplant", transplant_lot_id=str(lot_id))
+    response = client.get(f"/transplant-lots/{lot_id}/plantings")
+    assert "2026-05-01" in response.text
 
 
-def test_cell_edit_fragment_returns_200_for_empty_cell(client):
-    plot_id = _create_plot(client)
-    bed_id = _create_bed(client, plot_id)
-    response = client.get(f"/beds/{bed_id}/cells/0/0/edit-fragment")
-    assert response.status_code == 200
+def test_planting_lineage_page_returns_404_when_not_found(client):
+    response = client.get("/plantings/999999/lineage")
+    assert response.status_code == 404
 
 
-def test_editing_bed_scoped_planting_redirects_to_bed_detail(client):
+def test_planting_lineage_page_shows_no_lineage_for_seed_grown_planting(client):
+    variety_id = _create_variety(client)
+    client.post("/plantings", data={"variety_id": str(variety_id), "planted_date": "2026-05-01"})
+    planting_id = db.list_plantings()[0]["id"]
+    response = client.get(f"/plantings/{planting_id}/lineage")
+    assert "no transplant lineage" in response.text
+
+
+def test_planting_lineage_page_shows_self_grown_origin(client):
     plot_id = _create_plot(client)
     bed_id = _create_bed(client, plot_id)
     variety_id = _create_variety(client)
-    client.post(f"/beds/{bed_id}/cells/0/0", data={"variety_id": str(variety_id), "planted_date": "2026-05-01"})
-    planting_id = db.list_plantings_at_cell(bed_id, 0, 0)[0]["id"]
-    response = client.post(
-        f"/plantings/{planting_id}/edit",
-        data={"variety_id": str(variety_id), "planted_date": "2026-05-01"},
-        follow_redirects=False,
+    client.post("/plantings", data={"variety_id": str(variety_id), "planted_date": "2026-03-01"})
+    origin_id = db.list_plantings()[0]["id"]
+    client.post(
+        "/transplant-lots",
+        data={"variety_id": str(variety_id), "quantity_on_hand": "5", "origin_planting_id": str(origin_id)},
     )
-    assert response.headers["location"] == f"/beds/{bed_id}"
+    lot_id = db.list_transplant_lots()[0]["id"]
+    _stage_batch(client, bed_id, variety_id, [(0, 0)], source_type="transplant", transplant_lot_id=str(lot_id))
+    planting_id = db.list_plantings_for_bed(bed_id)[0]["id"]
+    response = client.get(f"/plantings/{planting_id}/lineage")
+    assert "Self-grown from" in response.text
 
 
-def test_editing_bed_scoped_planting_keeps_its_cell(client):
+def test_planting_lineage_page_shows_purchased_source(client):
     plot_id = _create_plot(client)
     bed_id = _create_bed(client, plot_id)
     variety_id = _create_variety(client)
-    client.post(f"/beds/{bed_id}/cells/1/2", data={"variety_id": str(variety_id), "planted_date": "2026-05-01"})
-    planting_id = db.list_plantings_at_cell(bed_id, 1, 2)[0]["id"]
-    client.post(f"/plantings/{planting_id}/edit", data={"variety_id": str(variety_id), "planted_date": "2026-06-01"})
-    assert (db.get_planting(planting_id)["x_in"], db.get_planting(planting_id)["y_in"]) == (12, 24)
-
-
-def test_deleting_bed_scoped_planting_redirects_to_bed_detail(client):
-    plot_id = _create_plot(client)
-    bed_id = _create_bed(client, plot_id)
-    variety_id = _create_variety(client)
-    client.post(f"/beds/{bed_id}/cells/0/0", data={"variety_id": str(variety_id), "planted_date": "2026-05-01"})
-    planting_id = db.list_plantings_at_cell(bed_id, 0, 0)[0]["id"]
-    response = client.post(f"/plantings/{planting_id}/delete", follow_redirects=False)
-    assert response.headers["location"] == f"/beds/{bed_id}"
+    client.post(
+        "/transplant-lots",
+        data={"variety_id": str(variety_id), "quantity_on_hand": "5", "purchased_vendor": "Local Nursery"},
+    )
+    lot_id = db.list_transplant_lots()[0]["id"]
+    _stage_batch(client, bed_id, variety_id, [(0, 0)], source_type="transplant", transplant_lot_id=str(lot_id))
+    planting_id = db.list_plantings_for_bed(bed_id)[0]["id"]
+    response = client.get(f"/plantings/{planting_id}/lineage")
+    assert "Local Nursery" in response.text
 
 
 def _farm_calendar_url(year, month):

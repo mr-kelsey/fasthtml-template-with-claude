@@ -1,9 +1,11 @@
+import json
 from datetime import date
 
 from fasthtml import common as fast
+from fasthtml.svg import Svg, Rect, Circle, G, Defs, Pattern, Path
 
 from farm.layout import layout
-from farm.helpers import parse_optional_int, compute_window, cell_to_inches
+from farm.helpers import parse_optional_int, parse_optional_float, compute_window
 import db
 
 router = fast.APIRouter()
@@ -251,6 +253,10 @@ def update_planting_route(
         notes=notes.strip() or None,
         x_in=existing["x_in"],
         y_in=existing["y_in"],
+        seed_lot_id=existing["seed_lot_id"],
+        transplant_lot_id=existing["transplant_lot_id"],
+        source_type=existing["source_type"],
+        soil_temp_f=existing["soil_temp_f"],
     )
     if existing["bed_id"] is not None:
         return fast.Redirect(f"/beds/{existing['bed_id']}")
@@ -268,104 +274,298 @@ def delete_planting_route(planting_id: int):
     return fast.Redirect("/plantings")
 
 
-def _cell_assign_form(bed, x, y, varieties):
-    "Always blank -- adds a new planting to the cell. Editing an existing one goes through /plantings/{id}/edit."
+@router("/plantings/{planting_id}/lineage", methods=["get"])
+def planting_lineage_page(planting_id: int):
+    "Walks transplant_lot_id -> transplant_lots.origin_planting_id to find the self-grown nursery planting, if any."
+    planting = db.get_planting(planting_id)
+    if planting is None:
+        return fast.Response("Planting not found.", status_code=404)
+    variety = db.get_seed_variety(planting["variety_id"])
+    variety_label = f"{variety['common_name']} - {variety['name']}" if variety else "Unknown variety"
+    lineage_content = (fast.P("This planting was grown from seed -- no transplant lineage to show."),)
+    if planting["source_type"] == "transplant" and planting["transplant_lot_id"] is not None:
+        lot = db.get_transplant_lot(planting["transplant_lot_id"])
+        if lot is None:
+            lineage_content = (fast.P("The transplant lot for this planting no longer exists."),)
+        elif lot["origin_planting_id"] is not None:
+            origin = db.get_planting(lot["origin_planting_id"])
+            if origin is None:
+                lineage_content = (fast.P("The origin planting for this lot no longer exists."),)
+            else:
+                origin_variety = db.get_seed_variety(origin["variety_id"])
+                origin_label = (
+                    f"{origin_variety['common_name']} - {origin_variety['name']}" if origin_variety else "Unknown variety"
+                )
+                lineage_content = (
+                    fast.P("Self-grown from:"),
+                    fast.P(
+                        fast.A(
+                            f"{origin_label} planted {origin['planted_date']} (#{origin['id']})",
+                            href=f"/plantings/{origin['id']}/edit",
+                        )
+                    ),
+                )
+        else:
+            lineage_content = (
+                fast.P("Purchased:"),
+                fast.Ul(
+                    fast.Li(f"Source: {lot['purchased_source'] or 'unknown'}"),
+                    fast.Li(f"Vendor: {lot['purchased_vendor'] or 'unknown'}"),
+                    fast.Li(f"Date: {lot['purchased_date'] or 'unknown'}"),
+                ),
+            )
+    return layout(
+        "Planting Lineage",
+        fast.H1(f"Lineage: {variety_label} (#{planting_id})"),
+        *lineage_content,
+    )
+
+
+def _planting_dot(planting):
+    "An already-persisted planting, rendered at its real inch position in the variety's color."
+    return Circle(
+        2, cx=planting["x_in"], cy=planting["y_in"], fill=planting["color_hex"] or "#888888",
+        cls="planting-dot", data_planting_id=str(planting["id"]), data_variety_id=str(planting["variety_id"]),
+        data_common_name=planting["common_name"] or "",
+    )
+
+
+DOT_RADIUS_IN = 2  # planting-dot / lattice-point circle radius, in the same inch units as the viewBox
+CANVAS_MARGIN_IN = DOT_RADIUS_IN + 1  # viewBox padding so edge/corner points (x_in or y_in == 0 or the bed's max)
+# aren't clipped by the SVG's own boundary -- their circles would otherwise be cut in half, both visually and
+# for hit-testing (a corner lattice point at (0, length_in) is a real, common click target: bed edges/border
+# rows), since the root <svg> clips content outside its viewBox.
+
+
+def _bed_canvas(bed, plantings):
+    width_in = bed["width_ft"] * 12
+    length_in = bed["length_ft"] * 12
+    return Svg(
+        Defs(
+            Pattern(
+                Path(d="M 12 0 L 0 0 0 12", cls="grid-line-detail"),
+                id="inch-foot-grid", width=12, height=12, patternUnits="userSpaceOnUse",
+            )
+        ),
+        Rect(width_in, length_in, cls="grid-bg-detail"),
+        Rect(width_in, length_in, cls="bed-boundary"),
+        G(*[_planting_dot(p) for p in plantings if p["x_in"] is not None], id="planted-layer"),
+        G(id="lattice-layer"),
+        G(id="staged-layer"),
+        viewBox=f"{-CANVAS_MARGIN_IN} {-CANVAS_MARGIN_IN} {width_in + 2 * CANVAS_MARGIN_IN} {length_in + 2 * CANVAS_MARGIN_IN}",
+        cls="bed-detail-svg",
+        id="bed-detail-svg",
+        data_width_in=str(width_in),
+        data_length_in=str(length_in),
+    )
+
+
+def _palette_item(variety, mode):
+    return fast.Button(
+        fast.Span(cls="variety-swatch", style=f"background-color:{variety['color_hex'] or '#888888'}"),
+        f" {variety['common_name']} - {variety['name']}",
+        type="button",
+        cls="variety-palette-item",
+        data_variety_id=str(variety["id"]),
+        data_mode=mode,
+    )
+
+
+def _bed_detail_data(bed, plantings, seed_stock_varieties, transplant_stock_varieties, transplant_lots_by_variety, companion_rules):
+    return {
+        "bed_id": bed["id"],
+        "width_in": bed["width_ft"] * 12,
+        "length_in": bed["length_ft"] * 12,
+        "plantings": [
+            {
+                "id": p["id"], "variety_id": p["variety_id"], "common_name": p["common_name"],
+                "x_in": p["x_in"], "y_in": p["y_in"], "color_hex": p["color_hex"] or "#888888",
+            }
+            for p in plantings
+            if p["x_in"] is not None
+        ],
+        "seed_varieties": [
+            {
+                "id": v["id"], "common_name": v["common_name"], "name": v["name"],
+                "spacing_in": v["spacing_in"], "color_hex": v["color_hex"] or "#888888",
+            }
+            for v in seed_stock_varieties
+        ],
+        "transplant_varieties": [
+            {
+                "id": v["id"], "common_name": v["common_name"], "name": v["name"],
+                "spacing_in": v["spacing_in"], "color_hex": v["color_hex"] or "#888888",
+            }
+            for v in transplant_stock_varieties
+        ],
+        "transplant_lots_by_variety": {
+            str(variety_id): [{"id": lot["id"], "quantity_on_hand": lot["quantity_on_hand"]} for lot in lots]
+            for variety_id, lots in transplant_lots_by_variety.items()
+        },
+        "companion_rules": [
+            {"a": r["plant_a_common_name"], "b": r["plant_b_common_name"], "relation": r["relation"]}
+            for r in companion_rules
+        ],
+    }
+
+
+def _batch_plant_form(bed_id):
     return fast.Form(
-        fast.Select(
-            *[
-                fast.Option(f"{variety['common_name']} - {variety['name']}", value=str(variety["id"]))
-                for variety in varieties
-            ],
-            name="variety_id",
-            required=True,
-        ),
+        fast.Input(type="hidden", name="variety_id", id="batch-variety-id"),
+        fast.Input(type="hidden", name="source_type", id="batch-source-type"),
+        fast.Input(type="hidden", name="points", id="batch-points"),
+        fast.Div(id="batch-staged-count"),
         fast.Input(name="planted_date", type="date", required=True),
-        fast.Input(name="quantity", type="number", placeholder="Quantity"),
-        fast.Input(name="quantity_germinated", type="number", placeholder="Quantity germinated"),
-        fast.Textarea("", name="notes", placeholder="Notes (optional)"),
-        fast.Button("Add", type="submit"),
+        fast.Input(name="soil_temp_f", type="number", step="0.1", placeholder="Soil temp (F, optional)"),
+        fast.Select(fast.Option("Choose a transplant lot", value=""), name="transplant_lot_id", id="batch-transplant-lot-select", hidden=True),
+        fast.Label(
+            "On hand in this lot:",
+            fast.Input(type="number", min="0", id="armed-lot-quantity-input"),
+            id="armed-lot-quantity-wrap",
+            hidden=True,
+        ),
+        fast.Button("Plant staged points", type="submit"),
         method="post",
-        action=f"/beds/{bed['id']}/cells/{x}/{y}",
+        action=f"/beds/{bed_id}/cells/batch",
+        id="batch-plant-form",
+        hidden=True,
     )
 
 
-def _validate_cell_coordinates(bed, x, y):
-    "Returns an error fast.Response when (x, y) falls outside the bed's own grid, else None."
-    if not (0 <= x < bed["width_ft"]) or not (0 <= y < bed["length_ft"]):
-        return fast.Response("Cell is outside the bed.", status_code=422)
-    return None
-
-
-def _cell_planting_row(planting):
-    return fast.Li(
-        f"{planting['common_name']} - {planting['variety_name']} (planted {planting['planted_date']})",
-        fast.A("Edit", href=f"/plantings/{planting['id']}/edit"),
-        fast.Form(
-            fast.Button("Delete", type="submit"), method="post", action=f"/plantings/{planting['id']}/delete"
-        ),
-    )
-
-
-@router("/beds/{bed_id}/cells/{x}/{y}/edit-fragment", methods=["get"])
-def cell_edit_fragment(bed_id: int, x: int, y: int):
-    "A cell can hold more than one planting (interplanting), so this lists every occupant plus an add form."
+@router("/beds/{bed_id}", methods=["get"])
+def bed_detail_page(bed_id: int):
     bed = db.get_bed(bed_id)
     if bed is None:
         return fast.Response("Bed not found.", status_code=404)
-    plantings = db.list_plantings_at_cell(bed_id, x, y)
-    clear_form = (
-        fast.Form(
-            fast.Button("Clear cell", type="submit"), method="post", action=f"/beds/{bed_id}/cells/{x}/{y}/clear"
+    plantings = db.list_plantings_for_bed(bed_id)
+    seed_stock_varieties = db.list_seed_varieties_with_seed_stock()
+    transplant_stock_varieties = db.list_seed_varieties_with_transplant_stock()
+    transplant_lots_by_variety = {
+        v["id"]: db.list_available_transplant_lots_for_variety(v["id"]) for v in transplant_stock_varieties
+    }
+    companion_rules = db.list_companion_rules()
+    data = _bed_detail_data(
+        bed, plantings, seed_stock_varieties, transplant_stock_varieties, transplant_lots_by_variety, companion_rules
+    )
+    canvas = _bed_canvas(bed, plantings)
+    palette = fast.Div(
+        fast.Fieldset(
+            fast.Label(
+                fast.Input(type="radio", name="mode", value="seed", checked=True, id="mode-seed"), " Direct sow"
+            ),
+            fast.Label(
+                fast.Input(type="radio", name="mode", value="transplant", id="mode-transplant"), " Transplant"
+            ),
         ),
-    ) if plantings else ()
-    return (
-        fast.H3(f"Cell ({x}, {y})"),
-        fast.Ul(*[_cell_planting_row(p) for p in plantings]) if plantings else fast.P("Nothing planted here yet."),
-        *clear_form,
-        fast.H4("Add a planting"),
-        _cell_assign_form(bed, x, y, db.list_seed_varieties()),
-        fast.Button("Close", type="button", onclick="document.getElementById('cell-dialog').close()"),
+        fast.Div(
+            *(
+                [_palette_item(v, "seed") for v in seed_stock_varieties]
+                if seed_stock_varieties
+                else [fast.P("No varieties with seed stock on hand.")]
+            ),
+            id="palette-seed",
+            cls="variety-palette",
+        ),
+        fast.Div(
+            *(
+                [_palette_item(v, "transplant") for v in transplant_stock_varieties]
+                if transplant_stock_varieties
+                else [fast.P("No varieties with transplant stock on hand.")]
+            ),
+            id="palette-transplant",
+            cls="variety-palette",
+            hidden=True,
+        ),
+        cls="bed-detail-sidebar",
+    )
+    edit_bed_button = fast.Button(
+        "Edit bed",
+        type="button",
+        hx_get=f"/beds/{bed_id}/edit-fragment",
+        hx_target="#bed-dialog-body",
+        hx_trigger="click",
+        hx_on__after_request="document.getElementById('bed-dialog').showModal()",
+    )
+    return layout(
+        f"{bed['label']} Detail",
+        fast.H1(f"{bed['label']} ({bed['width_ft']} x {bed['length_ft']} ft)"),
+        fast.A("Back to plot map", href=f"/land-plots/{bed['plot_id']}/map"),
+        edit_bed_button,
+        fast.Script(json.dumps(data), type="application/json", id="bed-detail-data"),
+        fast.Div(canvas, palette, cls="bed-detail-layout"),
+        _batch_plant_form(bed_id),
+        fast.Dialog(fast.Div(id="bed-dialog-body"), id="bed-dialog"),
+        fast.Script(src="/bed-detail.js"),
     )
 
 
-@router("/beds/{bed_id}/cells/{x}/{y}", methods=["post"])
-def assign_cell_route(
+def _validate_points(raw_points, width_in, length_in):
+    "Returns (list of (x_in, y_in) tuples, None) or (None, error_message)."
+    try:
+        parsed = json.loads(raw_points)
+    except (TypeError, ValueError):
+        return None, "Invalid points payload."
+    if not isinstance(parsed, list) or not parsed:
+        return None, "At least one staged point is required."
+    points = []
+    for item in parsed:
+        try:
+            x_in, y_in = float(item["x_in"]), float(item["y_in"])
+        except (KeyError, TypeError, ValueError):
+            return None, "Invalid point payload."
+        if not (0 <= x_in <= width_in) or not (0 <= y_in <= length_in):
+            return None, "A staged point falls outside the bed."
+        points.append((x_in, y_in))
+    return points, None
+
+
+@router("/beds/{bed_id}/cells/batch", methods=["post"])
+def batch_plant_route(
     bed_id: int,
-    x: int,
-    y: int,
     variety_id: str,
+    source_type: str,
     planted_date: str,
-    quantity: str = "",
-    quantity_germinated: str = "",
-    notes: str = "",
+    points: str,
+    soil_temp_f: str = "",
+    transplant_lot_id: str = "",
 ):
-    "Adds a planting to this cell -- a cell can hold more than one (e.g. interplanting)."
+    "Stamps a batch of staged lattice points for one variety into the bed in one submission."
     bed = db.get_bed(bed_id)
     if bed is None:
         return fast.Response("Bed not found.", status_code=404)
-    coordinate_error = _validate_cell_coordinates(bed, x, y)
-    if coordinate_error is not None:
-        return coordinate_error
-    validated = _validate_planting_fields(variety_id, planted_date, quantity, quantity_germinated)
-    if isinstance(validated, fast.Response):
-        return validated
-    variety_id, planted_date, quantity, quantity_germinated = validated
-    db.add_planting(
-        variety_id,
-        planted_date,
-        bed_id=bed_id,
-        quantity=quantity,
-        quantity_germinated=quantity_germinated,
-        notes=notes.strip() or None,
-        x_in=cell_to_inches(x),
-        y_in=cell_to_inches(y),
+    validated_variety_id = _validate_variety_id(variety_id)
+    if isinstance(validated_variety_id, fast.Response):
+        return validated_variety_id
+    variety_id = validated_variety_id
+    planted_date = planted_date.strip()
+    if not planted_date or _parse_date_or_none(planted_date) is None:
+        return fast.Response("Invalid planted date.", status_code=422)
+    if source_type not in ("seed", "transplant"):
+        return fast.Response("Invalid source type.", status_code=422)
+    width_in = bed["width_ft"] * 12
+    length_in = bed["length_ft"] * 12
+    parsed_points, error = _validate_points(points, width_in, length_in)
+    if error:
+        return fast.Response(error, status_code=422)
+    ok, soil_temp_f_value = parse_optional_float(soil_temp_f)
+    if not ok:
+        return fast.Response("Soil temp must be a number.", status_code=422)
+    validated_transplant_lot_id = None
+    if source_type == "seed":
+        if not db.list_seed_lots_for_variety(variety_id):
+            return fast.Response("This variety has no seed lots on hand.", status_code=422)
+    else:
+        ok, lot_id = parse_optional_int(transplant_lot_id)
+        if not ok or lot_id is None:
+            return fast.Response("Choose a transplant lot.", status_code=422)
+        lot = db.get_transplant_lot(lot_id)
+        if lot is None or lot["variety_id"] != variety_id:
+            return fast.Response("Invalid transplant lot for this variety.", status_code=422)
+        if lot["quantity_on_hand"] is None or len(parsed_points) > lot["quantity_on_hand"]:
+            return fast.Response("Not enough transplants on hand in that lot.", status_code=422)
+        validated_transplant_lot_id = lot_id
+    db.batch_add_plantings(
+        variety_id, planted_date, bed_id, source_type, parsed_points,
+        transplant_lot_id=validated_transplant_lot_id, soil_temp_f=soil_temp_f_value,
     )
-    return fast.Redirect(f"/beds/{bed_id}")
-
-
-@router("/beds/{bed_id}/cells/{x}/{y}/clear", methods=["post"])
-def clear_cell_route(bed_id: int, x: int, y: int):
-    "Removes every planting occupying this cell."
-    for planting in db.list_plantings_at_cell(bed_id, x, y):
-        db.delete_planting(planting["id"])
     return fast.Redirect(f"/beds/{bed_id}")

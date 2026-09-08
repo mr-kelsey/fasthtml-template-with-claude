@@ -8,6 +8,7 @@ from farm.helpers import (
     validate_relation,
     format_day_range,
     format_npk,
+    next_palette_color,
     SUN_NEEDS_OPTIONS,
     RELATION_OPTIONS,
 )
@@ -92,7 +93,8 @@ def _agronomic_form_fields(variety=None):
     )
 
 
-def _variety_form(action, submit_label, variety=None):
+def _variety_form(action, submit_label, variety=None, default_color_hex=None):
+    color_value = (variety["color_hex"] if variety else None) or default_color_hex or "#000000"
     return fast.Form(
         fast.Input(
             name="common_name",
@@ -112,6 +114,7 @@ def _variety_form(action, submit_label, variety=None):
         ),
         fast.Input(name="genus", placeholder="Genus (optional)", value=_optional_value(variety, "genus")),
         fast.Input(name="species", placeholder="Species (optional)", value=_optional_value(variety, "species")),
+        fast.Label("Color (used for staged/planted dots on the bed detail map)", fast.Input(name="color_hex", type="color", value=color_value)),
         *_agronomic_form_fields(variety),
         fast.Button(submit_label, type="submit"),
         method="post",
@@ -121,6 +124,7 @@ def _variety_form(action, submit_label, variety=None):
 
 def _variety_row(variety):
     return fast.Tr(
+        fast.Td(fast.Span(cls="variety-swatch", style=f"background-color:{variety['color_hex'] or '#888888'}")),
         fast.Td(variety["name"]),
         fast.Td(variety["common_name"]),
         fast.Td(variety["plant_family"]),
@@ -186,7 +190,7 @@ def _companion_rule_row(rule):
 def list_seed_varieties_page():
     varieties = db.list_seed_varieties()
     headers = [
-        "Variety", "Common Name", "Family", "Genus", "Species",
+        "Color", "Variety", "Common Name", "Family", "Genus", "Species",
         "Germination (days)", "Maturity (days)", "Spacing (in)", "Sun", "Water",
         "Soil", "pH Min", "pH Max", "Feed Freq (days)", "Growth N-P-K", "Produce N-P-K", "",
     ]
@@ -214,7 +218,7 @@ def list_seed_varieties_page():
         "Seed Varieties",
         fast.H1("Seed Varieties"),
         fast.H2("Add a seed variety"),
-        _variety_form(action="/seed-varieties", submit_label="Add Variety"),
+        _variety_form(action="/seed-varieties", submit_label="Add Variety", default_color_hex=next_palette_color(varieties)),
         fast.H2("All varieties"),
         table,
         fast.H2("Companion / Antagonist Rules"),
@@ -268,6 +272,7 @@ def add_seed_variety_route(
     feeding_frequency_days: str = "",
     growth_npk: str = "",
     produce_npk: str = "",
+    color_hex: str = "",
 ):
     validated = _validate_required_fields(common_name, name, plant_family)
     if isinstance(validated, fast.Response):
@@ -292,6 +297,7 @@ def add_seed_variety_route(
         species=species.strip() or None,
         sun_needs=sun_needs_value,
         water_needs=water_needs.strip() or None,
+        color_hex=color_hex.strip() or None,
         **fields,
         **soil_feeding_fields,
     )
@@ -345,6 +351,7 @@ def update_seed_variety_route(
     feeding_frequency_days: str = "",
     growth_npk: str = "",
     produce_npk: str = "",
+    color_hex: str = "",
 ):
     validated = _validate_required_fields(common_name, name, plant_family)
     if isinstance(validated, fast.Response):
@@ -370,6 +377,7 @@ def update_seed_variety_route(
         species=species.strip() or None,
         sun_needs=sun_needs_value,
         water_needs=water_needs.strip() or None,
+        color_hex=color_hex.strip() or None,
         **fields,
         **soil_feeding_fields,
     )

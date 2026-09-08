@@ -2,7 +2,7 @@ from fasthtml import common as fast
 from fasthtml.svg import Svg, Rect, G, Text, Defs, Pattern, Path
 
 from farm.layout import layout
-from farm.helpers import parse_required_int, parse_optional_int, inches_to_cell
+from farm.helpers import parse_required_int, parse_optional_int
 import db
 
 router = fast.APIRouter()
@@ -408,54 +408,6 @@ def delete_bed_route(bed_id: int):
     return fast.Redirect(f"/land-plots/{bed['plot_id']}/map")
 
 
-def _bed_cell(bed_id, plantings_here, x, y):
-    "A cell can hold more than one planting (interplanting) -- its label lists every occupant."
-    occupied = bool(plantings_here)
-    label = ", ".join(f"{p['common_name']} - {p['variety_name']}" for p in plantings_here) if occupied else "+"
-    classes = "bed-cell occupied" if occupied else "bed-cell"
-    return fast.Div(
-        label,
-        cls=classes,
-        hx_get=f"/beds/{bed_id}/cells/{x}/{y}/edit-fragment",
-        hx_target="#cell-dialog-body",
-        hx_trigger="click",
-        hx_on__after_request="document.getElementById('cell-dialog').showModal()",
-    )
-
-
-@router("/beds/{bed_id}", methods=["get"])
-def bed_detail_page(bed_id: int):
-    bed = db.get_bed(bed_id)
-    if bed is None:
-        return fast.Response("Bed not found.", status_code=404)
-    plantings = db.list_plantings_for_bed(bed_id)
-    by_cell = {}
-    for p in plantings:
-        if p["x_in"] is not None:
-            by_cell.setdefault((inches_to_cell(p["x_in"]), inches_to_cell(p["y_in"])), []).append(p)
-    grid = fast.Div(
-        *[
-            _bed_cell(bed_id, by_cell.get((x, y), []), x, y)
-            for y in range(bed["length_ft"])
-            for x in range(bed["width_ft"])
-        ],
-        cls="bed-grid",
-        style=f"grid-template-columns: repeat({bed['width_ft']}, 1fr);",
-    )
-    edit_bed_button = fast.Button(
-        "Edit bed",
-        type="button",
-        hx_get=f"/beds/{bed_id}/edit-fragment",
-        hx_target="#bed-dialog-body",
-        hx_trigger="click",
-        hx_on__after_request="document.getElementById('bed-dialog').showModal()",
-    )
-    return layout(
-        f"{bed['label']} Detail",
-        fast.H1(f"{bed['label']} ({bed['width_ft']} x {bed['length_ft']} ft)"),
-        fast.A("Back to plot map", href=f"/land-plots/{bed['plot_id']}/map"),
-        edit_bed_button,
-        grid,
-        fast.Dialog(fast.Div(id="cell-dialog-body"), id="cell-dialog"),
-        fast.Dialog(fast.Div(id="bed-dialog-body"), id="bed-dialog"),
-    )
+# Bed detail rendering (variety-palette + spacing-lattice planting UI) lives in
+# farm/pages/plantings.py -- it's planting-centric, same reasoning that already put the old
+# cell routes there instead of here.

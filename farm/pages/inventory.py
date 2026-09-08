@@ -344,3 +344,43 @@ def update_transplant_lot_route(
 def delete_transplant_lot_route(transplant_lot_id: int):
     db.delete_transplant_lot(transplant_lot_id)
     return fast.Redirect("/inventory")
+
+
+@router("/transplant-lots/{transplant_lot_id}/quantity", methods=["post"])
+def update_transplant_lot_quantity_route(transplant_lot_id: int, quantity_on_hand: str):
+    "Single-field inline update -- the bed-detail palette's armed-variety row edits quantity live via fetch()."
+    if db.get_transplant_lot(transplant_lot_id) is None:
+        return fast.Response("Transplant lot not found.", status_code=404)
+    ok, quantity = parse_optional_int(quantity_on_hand)
+    if not ok or quantity is None or quantity < 0:
+        return fast.Response("Quantity on hand must be a non-negative number.", status_code=422)
+    db.update_transplant_lot_quantity(transplant_lot_id, quantity)
+    return fast.Response(status_code=204)
+
+
+@router("/transplant-lots/{transplant_lot_id}/plantings", methods=["get"])
+def transplant_lot_plantings_page(transplant_lot_id: int):
+    "The lot side of phase 5's lineage view -- every bed-planting drawn from this lot."
+    lot = db.get_transplant_lot(transplant_lot_id)
+    if lot is None:
+        return fast.Response("Transplant lot not found.", status_code=404)
+    variety = db.get_seed_variety(lot["variety_id"])
+    plantings = db.list_plantings_by_transplant_lot(transplant_lot_id)
+    headers = ["Bed", "Planted", ""]
+    rows = (
+        [
+            fast.Tr(
+                fast.Td(str(p["bed_id"]) if p["bed_id"] is not None else ""),
+                fast.Td(p["planted_date"]),
+                fast.Td(fast.A("View", href=f"/plantings/{p['id']}/edit")),
+            )
+            for p in plantings
+        ]
+        if plantings
+        else [fast.Tr(fast.Td("No plantings drawn from this lot yet.", colspan=str(len(headers))))]
+    )
+    return layout(
+        "Transplant Lot Plantings",
+        fast.H1(f"Plantings from lot: {_variety_label(variety) if variety else 'Unknown'}"),
+        fast.Table(fast.Thead(fast.Tr(*[fast.Th(h) for h in headers])), fast.Tbody(*rows)),
+    )
