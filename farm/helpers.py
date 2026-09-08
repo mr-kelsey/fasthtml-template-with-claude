@@ -58,6 +58,17 @@ def parse_optional_float(value: str):
         return False, None
 
 
+def parse_optional_date(value: str):
+    "Returns (ok, date_string_or_none). ok is False when value is non-blank but not a valid ISO date."
+    if value is None or value.strip() == "":
+        return True, None
+    try:
+        date.fromisoformat(value.strip())
+        return True, value.strip()
+    except ValueError:
+        return False, None
+
+
 def parse_required_int(value: str, field_label: str):
     "Returns (int, None) or (None, error_message) if value is blank or not a valid integer."
     if value is None or value.strip() == "":

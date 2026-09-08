@@ -315,6 +315,158 @@ def _create_variety(client, common_name="Tomato", variety_name="Cherokee Purple"
     return db.list_seed_varieties()[0]["id"]
 
 
+def test_inventory_page_returns_200(client):
+    response = client.get("/inventory")
+    assert response.status_code == 200
+
+
+def test_inventory_page_shows_empty_states_when_none_exist(client):
+    response = client.get("/inventory")
+    assert "No seed lots yet" in response.text
+    assert "No transplant lots yet" in response.text
+
+
+def test_add_seed_lot_redirects_with_303(client):
+    variety_id = _create_variety(client)
+    response = client.post(
+        "/seed-lots", data={"variety_id": str(variety_id), "quantity_on_hand": "50"}, follow_redirects=False
+    )
+    assert response.status_code == 303
+
+
+def test_add_seed_lot_appears_in_inventory(client):
+    variety_id = _create_variety(client)
+    client.post("/seed-lots", data={"variety_id": str(variety_id), "seed_source": "Baker Creek"})
+    response = client.get("/inventory")
+    assert "Baker Creek" in response.text
+
+
+def test_add_seed_lot_rejects_invalid_variety(client):
+    response = client.post("/seed-lots", data={"variety_id": "999999"})
+    assert response.status_code == 422
+
+
+def test_add_seed_lot_rejects_non_numeric_quantity(client):
+    variety_id = _create_variety(client)
+    response = client.post("/seed-lots", data={"variety_id": str(variety_id), "quantity_on_hand": "many"})
+    assert response.status_code == 422
+
+
+def test_add_seed_lot_rejects_invalid_acquired_date(client):
+    variety_id = _create_variety(client)
+    response = client.post("/seed-lots", data={"variety_id": str(variety_id), "acquired_date": "not-a-date"})
+    assert response.status_code == 422
+
+
+def test_edit_seed_lot_page_returns_200(client):
+    variety_id = _create_variety(client)
+    client.post("/seed-lots", data={"variety_id": str(variety_id)})
+    lot_id = db.list_seed_lots()[0]["id"]
+    response = client.get(f"/seed-lots/{lot_id}/edit")
+    assert response.status_code == 200
+
+
+def test_edit_seed_lot_page_returns_404_when_not_found(client):
+    response = client.get("/seed-lots/999999/edit")
+    assert response.status_code == 404
+
+
+def test_edit_seed_lot_updates_quantity(client):
+    variety_id = _create_variety(client)
+    client.post("/seed-lots", data={"variety_id": str(variety_id), "quantity_on_hand": "50"})
+    lot_id = db.list_seed_lots()[0]["id"]
+    client.post(f"/seed-lots/{lot_id}/edit", data={"quantity_on_hand": "30"})
+    assert db.get_seed_lot(lot_id)["quantity_on_hand"] == 30
+
+
+def test_delete_seed_lot_removes_it(client):
+    variety_id = _create_variety(client)
+    client.post("/seed-lots", data={"variety_id": str(variety_id)})
+    lot_id = db.list_seed_lots()[0]["id"]
+    client.post(f"/seed-lots/{lot_id}/delete")
+    assert db.list_seed_lots() == []
+
+
+def test_add_transplant_lot_redirects_with_303(client):
+    variety_id = _create_variety(client)
+    response = client.post(
+        "/transplant-lots", data={"variety_id": str(variety_id), "quantity_on_hand": "12"}, follow_redirects=False
+    )
+    assert response.status_code == 303
+
+
+def test_add_transplant_lot_appears_in_inventory(client):
+    variety_id = _create_variety(client)
+    client.post("/transplant-lots", data={"variety_id": str(variety_id), "purchased_vendor": "Local Nursery"})
+    response = client.get("/inventory")
+    assert "Local Nursery" in response.text
+
+
+def test_add_transplant_lot_with_origin_planting_persists_it(client):
+    variety_id = _create_variety(client)
+    client.post("/plantings", data={"variety_id": str(variety_id), "planted_date": "2026-03-01"})
+    origin_id = db.list_plantings()[0]["id"]
+    client.post("/transplant-lots", data={"variety_id": str(variety_id), "origin_planting_id": str(origin_id)})
+    lot = db.list_transplant_lots()[0]
+    assert lot["origin_planting_id"] == origin_id
+
+
+def test_add_transplant_lot_without_origin_planting_defaults_to_none(client):
+    variety_id = _create_variety(client)
+    client.post("/transplant-lots", data={"variety_id": str(variety_id)})
+    assert db.list_transplant_lots()[0]["origin_planting_id"] is None
+
+
+def test_add_transplant_lot_rejects_invalid_variety(client):
+    response = client.post("/transplant-lots", data={"variety_id": "999999"})
+    assert response.status_code == 422
+
+
+def test_add_transplant_lot_rejects_invalid_origin_planting(client):
+    variety_id = _create_variety(client)
+    response = client.post(
+        "/transplant-lots", data={"variety_id": str(variety_id), "origin_planting_id": "999999"}
+    )
+    assert response.status_code == 422
+
+
+def test_add_transplant_lot_rejects_invalid_purchased_date(client):
+    variety_id = _create_variety(client)
+    response = client.post(
+        "/transplant-lots", data={"variety_id": str(variety_id), "purchased_date": "not-a-date"}
+    )
+    assert response.status_code == 422
+
+
+def test_edit_transplant_lot_page_returns_200(client):
+    variety_id = _create_variety(client)
+    client.post("/transplant-lots", data={"variety_id": str(variety_id)})
+    lot_id = db.list_transplant_lots()[0]["id"]
+    response = client.get(f"/transplant-lots/{lot_id}/edit")
+    assert response.status_code == 200
+
+
+def test_edit_transplant_lot_page_returns_404_when_not_found(client):
+    response = client.get("/transplant-lots/999999/edit")
+    assert response.status_code == 404
+
+
+def test_edit_transplant_lot_updates_quantity(client):
+    variety_id = _create_variety(client)
+    client.post("/transplant-lots", data={"variety_id": str(variety_id), "quantity_on_hand": "12"})
+    lot_id = db.list_transplant_lots()[0]["id"]
+    client.post(f"/transplant-lots/{lot_id}/edit", data={"quantity_on_hand": "8"})
+    assert db.get_transplant_lot(lot_id)["quantity_on_hand"] == 8
+
+
+def test_delete_transplant_lot_removes_it(client):
+    variety_id = _create_variety(client)
+    client.post("/transplant-lots", data={"variety_id": str(variety_id)})
+    lot_id = db.list_transplant_lots()[0]["id"]
+    client.post(f"/transplant-lots/{lot_id}/delete")
+    assert db.list_transplant_lots() == []
+
+
 def test_plantings_page_returns_200(client):
     response = client.get("/plantings")
     assert response.status_code == 200

@@ -170,6 +170,118 @@ def test_delete_nonexistent_seed_lot_is_a_noop():
     db.delete_seed_lot(999999)
 
 
+def test_list_seed_lots_returns_empty_list_when_none_exist():
+    assert db.list_seed_lots() == []
+
+
+def test_list_seed_lots_includes_variety_name_from_join():
+    variety_id = _add_variety(common_name="Tomato", variety_name="Cherokee Purple")
+    db.add_seed_lot(variety_id, seed_source="Baker Creek")
+    lot = db.list_seed_lots()[0]
+    assert (lot["common_name"], lot["variety_name"], lot["seed_source"]) == ("Tomato", "Cherokee Purple", "Baker Creek")
+
+
+def test_list_seed_lots_spans_every_variety():
+    variety_a = _add_variety(common_name="Tomato", variety_name="Cherokee Purple")
+    variety_b = _add_variety(common_name="Pepper", variety_name="Bell")
+    db.add_seed_lot(variety_a)
+    db.add_seed_lot(variety_b)
+    assert len(db.list_seed_lots()) == 2
+
+
+def test_list_transplant_lots_for_variety_returns_empty_list_when_none_exist():
+    variety_id = _add_variety()
+    assert db.list_transplant_lots_for_variety(variety_id) == []
+
+
+def test_add_transplant_lot_persists_quantity_and_purchase_fields():
+    variety_id = _add_variety()
+    db.add_transplant_lot(
+        variety_id, quantity_on_hand=12, purchased_source="store", purchased_vendor="Local Nursery",
+        purchased_date="2026-04-01",
+    )
+    lot = db.list_transplant_lots_for_variety(variety_id)[0]
+    assert (lot["quantity_on_hand"], lot["purchased_source"], lot["purchased_vendor"], lot["purchased_date"]) == (
+        12, "store", "Local Nursery", "2026-04-01",
+    )
+
+
+def test_add_transplant_lot_persists_origin_planting_id():
+    variety_id = _add_variety()
+    origin_id = db.add_planting(variety_id, "2026-03-01")
+    db.add_transplant_lot(variety_id, origin_planting_id=origin_id)
+    lot = db.list_transplant_lots_for_variety(variety_id)[0]
+    assert lot["origin_planting_id"] == origin_id
+
+
+def test_add_transplant_lot_defaults_optional_fields_to_none():
+    variety_id = _add_variety()
+    db.add_transplant_lot(variety_id)
+    lot = db.list_transplant_lots_for_variety(variety_id)[0]
+    assert (lot["quantity_on_hand"], lot["origin_planting_id"], lot["purchased_source"], lot["notes"]) == (
+        None, None, None, None,
+    )
+
+
+def test_list_transplant_lots_for_variety_excludes_other_varieties_lots():
+    variety_a = _add_variety(common_name="Tomato", variety_name="Cherokee Purple")
+    variety_b = _add_variety(common_name="Pepper", variety_name="Bell")
+    db.add_transplant_lot(variety_b)
+    assert db.list_transplant_lots_for_variety(variety_a) == []
+
+
+def test_get_transplant_lot_returns_matching_row():
+    variety_id = _add_variety()
+    db.add_transplant_lot(variety_id, purchased_vendor="Local Nursery")
+    lot_id = db.list_transplant_lots_for_variety(variety_id)[0]["id"]
+    assert db.get_transplant_lot(lot_id)["purchased_vendor"] == "Local Nursery"
+
+
+def test_get_transplant_lot_returns_none_when_not_found():
+    assert db.get_transplant_lot(999999) is None
+
+
+def test_update_transplant_lot_changes_quantity_on_hand():
+    variety_id = _add_variety()
+    db.add_transplant_lot(variety_id, quantity_on_hand=12)
+    lot_id = db.list_transplant_lots_for_variety(variety_id)[0]["id"]
+    db.update_transplant_lot(lot_id, quantity_on_hand=8)
+    assert db.get_transplant_lot(lot_id)["quantity_on_hand"] == 8
+
+
+def test_delete_transplant_lot_removes_it():
+    variety_id = _add_variety()
+    db.add_transplant_lot(variety_id)
+    lot_id = db.list_transplant_lots_for_variety(variety_id)[0]["id"]
+    db.delete_transplant_lot(lot_id)
+    assert db.list_transplant_lots_for_variety(variety_id) == []
+
+
+def test_delete_nonexistent_transplant_lot_is_a_noop():
+    db.delete_transplant_lot(999999)
+
+
+def test_list_transplant_lots_returns_empty_list_when_none_exist():
+    assert db.list_transplant_lots() == []
+
+
+def test_list_transplant_lots_includes_variety_name_from_join():
+    variety_id = _add_variety(common_name="Tomato", variety_name="Cherokee Purple")
+    db.add_transplant_lot(variety_id, purchased_vendor="Local Nursery")
+    lot = db.list_transplant_lots()[0]
+    assert (lot["common_name"], lot["variety_name"], lot["purchased_vendor"]) == (
+        "Tomato", "Cherokee Purple", "Local Nursery",
+    )
+
+
+def test_list_transplant_lots_spans_every_variety():
+    variety_a = _add_variety(common_name="Tomato", variety_name="Cherokee Purple")
+    variety_b = _add_variety(common_name="Pepper", variety_name="Bell")
+    db.add_transplant_lot(variety_a)
+    db.add_transplant_lot(variety_b)
+    assert len(db.list_transplant_lots()) == 2
+
+
 def test_list_companion_rules_returns_empty_list_when_none_exist():
     assert db.list_companion_rules() == []
 
@@ -242,6 +354,39 @@ def test_add_planting_defaults_seed_lot_id_to_none():
     variety_id = _add_variety()
     db.add_planting(variety_id, "2026-05-01")
     assert db.list_plantings()[0]["seed_lot_id"] is None
+
+
+def test_add_planting_defaults_source_type_to_seed():
+    variety_id = _add_variety()
+    db.add_planting(variety_id, "2026-05-01")
+    assert db.list_plantings()[0]["source_type"] == "seed"
+
+
+def test_add_planting_persists_transplant_source_type_and_lot_id():
+    variety_id = _add_variety()
+    db.add_transplant_lot(variety_id)
+    transplant_lot_id = db.list_transplant_lots_for_variety(variety_id)[0]["id"]
+    db.add_planting(variety_id, "2026-05-01", source_type="transplant", transplant_lot_id=transplant_lot_id)
+    planting = db.list_plantings()[0]
+    assert (planting["source_type"], planting["transplant_lot_id"]) == ("transplant", transplant_lot_id)
+
+
+def test_add_planting_defaults_transplant_lot_id_to_none():
+    variety_id = _add_variety()
+    db.add_planting(variety_id, "2026-05-01")
+    assert db.list_plantings()[0]["transplant_lot_id"] is None
+
+
+def test_update_planting_changes_transplant_lot_id_and_source_type():
+    variety_id = _add_variety()
+    db.add_transplant_lot(variety_id)
+    transplant_lot_id = db.list_transplant_lots_for_variety(variety_id)[0]["id"]
+    planting_id = db.add_planting(variety_id, "2026-05-01")
+    db.update_planting(
+        planting_id, variety_id, "2026-05-01", source_type="transplant", transplant_lot_id=transplant_lot_id
+    )
+    planting = db.get_planting(planting_id)
+    assert (planting["source_type"], planting["transplant_lot_id"]) == ("transplant", transplant_lot_id)
 
 
 def test_update_planting_changes_seed_lot_id():

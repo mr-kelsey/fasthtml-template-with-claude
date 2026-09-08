@@ -110,6 +110,21 @@ SCHEMA_STATEMENTS = [
         created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
     )
     """,
+    """
+    CREATE TABLE IF NOT EXISTS transplant_lots (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        variety_id INTEGER NOT NULL,
+        quantity_on_hand INTEGER,
+        origin_planting_id INTEGER,
+        purchased_source TEXT,
+        purchased_vendor TEXT,
+        purchased_date TEXT,
+        notes TEXT,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
+    """,
+    ("plantings", "transplant_lot_id", "INTEGER"),
+    ("plantings", "source_type", "TEXT NOT NULL DEFAULT 'seed'"),
 ]
 
 _AGRONOMIC_COLUMNS = (
@@ -128,10 +143,15 @@ _SEED_VARIETY_COLUMNS = (
 
 _PLANTING_COLUMNS = (
     "id, variety_id, bed_id, location, planted_date, quantity, quantity_germinated, notes, "
-    "cell_x, cell_y, x_in, y_in, seed_lot_id, created_at"
+    "cell_x, cell_y, x_in, y_in, seed_lot_id, transplant_lot_id, source_type, created_at"
 )
 
 _SEED_LOT_COLUMNS = "id, variety_id, quantity_on_hand, acquired_date, seed_source, notes, created_at"
+
+_TRANSPLANT_LOT_COLUMNS = (
+    "id, variety_id, quantity_on_hand, origin_planting_id, "
+    "purchased_source, purchased_vendor, purchased_date, notes, created_at"
+)
 
 _COMPANION_RULE_COLUMNS = "id, plant_a_common_name, plant_b_common_name, relation, notes, created_at"
 
@@ -409,6 +429,104 @@ class FarmDatabaseMixin:
         with self.engine.begin() as db_connection:
             db_connection.execute(text("DELETE FROM seed_lots WHERE id = :id"), {"id": seed_lot_id})
 
+    def list_seed_lots(self):
+        "Every seed lot across every variety, joined for display; list_seed_lots_for_variety scopes to one variety."
+        with self.engine.connect() as db_connection:
+            return db_connection.execute(
+                text(
+                    "SELECT sl.id, sl.variety_id, sl.quantity_on_hand, sl.acquired_date, sl.seed_source, "
+                    "sl.notes, sl.created_at, sv.name AS variety_name, sv.common_name "
+                    "FROM seed_lots sl LEFT JOIN seed_varieties sv ON sv.id = sl.variety_id "
+                    "ORDER BY sv.common_name, sv.name, sl.acquired_date DESC, sl.id DESC"
+                )
+            ).mappings().all()
+
+    def list_transplant_lots_for_variety(self, variety_id: int):
+        with self.engine.connect() as db_connection:
+            return db_connection.execute(
+                text(
+                    f"SELECT {_TRANSPLANT_LOT_COLUMNS} FROM transplant_lots WHERE variety_id = :variety_id "
+                    "ORDER BY purchased_date DESC, id DESC"
+                ),
+                {"variety_id": variety_id},
+            ).mappings().all()
+
+    def list_transplant_lots(self):
+        "Every transplant lot across every variety, joined for display."
+        with self.engine.connect() as db_connection:
+            return db_connection.execute(
+                text(
+                    "SELECT tl.id, tl.variety_id, tl.quantity_on_hand, tl.origin_planting_id, "
+                    "tl.purchased_source, tl.purchased_vendor, tl.purchased_date, tl.notes, tl.created_at, "
+                    "sv.name AS variety_name, sv.common_name "
+                    "FROM transplant_lots tl LEFT JOIN seed_varieties sv ON sv.id = tl.variety_id "
+                    "ORDER BY sv.common_name, sv.name, tl.purchased_date DESC, tl.id DESC"
+                )
+            ).mappings().all()
+
+    def get_transplant_lot(self, transplant_lot_id: int):
+        with self.engine.connect() as db_connection:
+            return db_connection.execute(
+                text(f"SELECT {_TRANSPLANT_LOT_COLUMNS} FROM transplant_lots WHERE id = :id"),
+                {"id": transplant_lot_id},
+            ).mappings().first()
+
+    def add_transplant_lot(
+        self,
+        variety_id: int,
+        quantity_on_hand: int = None,
+        origin_planting_id: int = None,
+        purchased_source: str = None,
+        purchased_vendor: str = None,
+        purchased_date: str = None,
+        notes: str = None,
+    ):
+        with self.engine.begin() as db_connection:
+            db_connection.execute(
+                text(
+                    "INSERT INTO transplant_lots (variety_id, quantity_on_hand, origin_planting_id, "
+                    "purchased_source, purchased_vendor, purchased_date, notes) "
+                    "VALUES (:variety_id, :quantity_on_hand, :origin_planting_id, "
+                    ":purchased_source, :purchased_vendor, :purchased_date, :notes)"
+                ),
+                {
+                    "variety_id": variety_id, "quantity_on_hand": quantity_on_hand,
+                    "origin_planting_id": origin_planting_id, "purchased_source": purchased_source or None,
+                    "purchased_vendor": purchased_vendor or None, "purchased_date": purchased_date or None,
+                    "notes": notes or None,
+                },
+            )
+
+    def update_transplant_lot(
+        self,
+        transplant_lot_id: int,
+        quantity_on_hand: int = None,
+        origin_planting_id: int = None,
+        purchased_source: str = None,
+        purchased_vendor: str = None,
+        purchased_date: str = None,
+        notes: str = None,
+    ):
+        with self.engine.begin() as db_connection:
+            db_connection.execute(
+                text(
+                    "UPDATE transplant_lots SET quantity_on_hand = :quantity_on_hand, "
+                    "origin_planting_id = :origin_planting_id, purchased_source = :purchased_source, "
+                    "purchased_vendor = :purchased_vendor, purchased_date = :purchased_date, notes = :notes "
+                    "WHERE id = :id"
+                ),
+                {
+                    "id": transplant_lot_id, "quantity_on_hand": quantity_on_hand,
+                    "origin_planting_id": origin_planting_id, "purchased_source": purchased_source or None,
+                    "purchased_vendor": purchased_vendor or None, "purchased_date": purchased_date or None,
+                    "notes": notes or None,
+                },
+            )
+
+    def delete_transplant_lot(self, transplant_lot_id: int):
+        with self.engine.begin() as db_connection:
+            db_connection.execute(text("DELETE FROM transplant_lots WHERE id = :id"), {"id": transplant_lot_id})
+
     def list_companion_rules(self):
         with self.engine.connect() as db_connection:
             return db_connection.execute(
@@ -448,7 +566,8 @@ class FarmDatabaseMixin:
             return db_connection.execute(
                 text(
                     "SELECT p.id, p.variety_id, p.bed_id, p.location, p.planted_date, p.quantity, "
-                    "p.quantity_germinated, p.notes, p.cell_x, p.cell_y, p.x_in, p.y_in, p.seed_lot_id, p.created_at, "
+                    "p.quantity_germinated, p.notes, p.cell_x, p.cell_y, p.x_in, p.y_in, p.seed_lot_id, "
+                    "p.transplant_lot_id, p.source_type, p.created_at, "
                     "sv.name AS variety_name, sv.common_name, "
                     "sv.germination_days_min, sv.germination_days_max, "
                     "sv.days_to_maturity_min, sv.days_to_maturity_max "
@@ -464,7 +583,8 @@ class FarmDatabaseMixin:
             return db_connection.execute(
                 text(
                     "SELECT p.id, p.variety_id, p.bed_id, p.location, p.planted_date, p.quantity, "
-                    "p.quantity_germinated, p.notes, p.cell_x, p.cell_y, p.x_in, p.y_in, p.seed_lot_id, p.created_at, "
+                    "p.quantity_germinated, p.notes, p.cell_x, p.cell_y, p.x_in, p.y_in, p.seed_lot_id, "
+                    "p.transplant_lot_id, p.source_type, p.created_at, "
                     "sv.name AS variety_name, sv.common_name, "
                     "sv.germination_days_min, sv.germination_days_max, "
                     "sv.days_to_maturity_min, sv.days_to_maturity_max "
@@ -497,7 +617,8 @@ class FarmDatabaseMixin:
 
     @staticmethod
     def _normalize_planting_fields(
-        bed_id, location, quantity, quantity_germinated, notes, x_in=None, y_in=None, seed_lot_id=None
+        bed_id, location, quantity, quantity_germinated, notes, x_in=None, y_in=None, seed_lot_id=None,
+        transplant_lot_id=None, source_type="seed",
     ):
         return {
             "bed_id": bed_id,
@@ -508,6 +629,8 @@ class FarmDatabaseMixin:
             "x_in": x_in,
             "y_in": y_in,
             "seed_lot_id": seed_lot_id,
+            "transplant_lot_id": transplant_lot_id,
+            "source_type": source_type,
         }
 
     def add_planting(
@@ -522,18 +645,21 @@ class FarmDatabaseMixin:
         x_in: float = None,
         y_in: float = None,
         seed_lot_id: int = None,
+        transplant_lot_id: int = None,
+        source_type: str = "seed",
     ):
         "Returns the new planting's id. Regenerates its (or its bed's) linked farm_events."
         fields = self._normalize_planting_fields(
-            bed_id, location, quantity, quantity_germinated, notes, x_in, y_in, seed_lot_id
+            bed_id, location, quantity, quantity_germinated, notes, x_in, y_in, seed_lot_id,
+            transplant_lot_id, source_type,
         )
         with self.engine.begin() as db_connection:
             result = db_connection.execute(
                 text(
                     "INSERT INTO plantings (variety_id, bed_id, location, planted_date, quantity, "
-                    "quantity_germinated, notes, x_in, y_in, seed_lot_id) "
+                    "quantity_germinated, notes, x_in, y_in, seed_lot_id, transplant_lot_id, source_type) "
                     "VALUES (:variety_id, :bed_id, :location, :planted_date, :quantity, "
-                    ":quantity_germinated, :notes, :x_in, :y_in, :seed_lot_id)"
+                    ":quantity_germinated, :notes, :x_in, :y_in, :seed_lot_id, :transplant_lot_id, :source_type)"
                 ),
                 {"variety_id": variety_id, "planted_date": planted_date, **fields},
             )
@@ -557,9 +683,12 @@ class FarmDatabaseMixin:
         x_in: float = None,
         y_in: float = None,
         seed_lot_id: int = None,
+        transplant_lot_id: int = None,
+        source_type: str = "seed",
     ):
         fields = self._normalize_planting_fields(
-            bed_id, location, quantity, quantity_germinated, notes, x_in, y_in, seed_lot_id
+            bed_id, location, quantity, quantity_germinated, notes, x_in, y_in, seed_lot_id,
+            transplant_lot_id, source_type,
         )
         with self.engine.begin() as db_connection:
             old_bed_id = db_connection.execute(
@@ -570,7 +699,8 @@ class FarmDatabaseMixin:
                     "UPDATE plantings SET variety_id = :variety_id, planted_date = :planted_date, "
                     "bed_id = :bed_id, location = :location, quantity = :quantity, "
                     "quantity_germinated = :quantity_germinated, notes = :notes, "
-                    "x_in = :x_in, y_in = :y_in, seed_lot_id = :seed_lot_id WHERE id = :id"
+                    "x_in = :x_in, y_in = :y_in, seed_lot_id = :seed_lot_id, "
+                    "transplant_lot_id = :transplant_lot_id, source_type = :source_type WHERE id = :id"
                 ),
                 {"id": planting_id, "variety_id": variety_id, "planted_date": planted_date, **fields},
             )

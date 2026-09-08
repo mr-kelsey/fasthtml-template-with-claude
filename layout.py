@@ -23,6 +23,7 @@ SUBDOMAINS = {
         "links": [
             ("Farm Calendar", "/farm-calendar"),
             ("Varieties", "/seed-varieties"),
+            ("Inventory", "/inventory"),
             ("Plantings", "/plantings"),
             ("Land Map", "/land-plots"),
         ],
