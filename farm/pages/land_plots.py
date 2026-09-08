@@ -2,7 +2,7 @@ from fasthtml import common as fast
 from fasthtml.svg import Svg, Rect, G, Text, Defs, Pattern, Path
 
 from farm.layout import layout
-from farm.helpers import parse_required_int, parse_optional_int
+from farm.helpers import parse_required_int, parse_optional_int, inches_to_cell
 import db
 
 router = fast.APIRouter()
@@ -431,8 +431,8 @@ def bed_detail_page(bed_id: int):
     plantings = db.list_plantings_for_bed(bed_id)
     by_cell = {}
     for p in plantings:
-        if p["cell_x"] is not None:
-            by_cell.setdefault((p["cell_x"], p["cell_y"]), []).append(p)
+        if p["x_in"] is not None:
+            by_cell.setdefault((inches_to_cell(p["x_in"]), inches_to_cell(p["y_in"])), []).append(p)
     grid = fast.Div(
         *[
             _bed_cell(bed_id, by_cell.get((x, y), []), x, y)

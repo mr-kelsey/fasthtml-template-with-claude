@@ -926,7 +926,7 @@ def test_editing_bed_scoped_planting_keeps_its_cell(client):
     client.post(f"/beds/{bed_id}/cells/1/2", data={"variety_id": str(variety_id), "planted_date": "2026-05-01"})
     planting_id = db.list_plantings_at_cell(bed_id, 1, 2)[0]["id"]
     client.post(f"/plantings/{planting_id}/edit", data={"variety_id": str(variety_id), "planted_date": "2026-06-01"})
-    assert (db.get_planting(planting_id)["cell_x"], db.get_planting(planting_id)["cell_y"]) == (1, 2)
+    assert (db.get_planting(planting_id)["x_in"], db.get_planting(planting_id)["y_in"]) == (12, 24)
 
 
 def test_deleting_bed_scoped_planting_redirects_to_bed_detail(client):

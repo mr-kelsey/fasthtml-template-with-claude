@@ -1,6 +1,6 @@
 from sqlalchemy import text
 
-from farm.helpers import compute_window
+from farm.helpers import compute_window, inches_to_cell
 
 SCHEMA_STATEMENTS = [
     """
@@ -58,6 +58,12 @@ SCHEMA_STATEMENTS = [
     )
     """,
     ("plantings", "seed_lot_id", "INTEGER"),
+    ("plantings", "x_in", "REAL"),
+    ("plantings", "y_in", "REAL"),
+    """
+    UPDATE plantings SET x_in = cell_x * 12, y_in = cell_y * 12
+    WHERE x_in IS NULL AND cell_x IS NOT NULL
+    """,
     """
     CREATE TABLE IF NOT EXISTS companion_rules (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -122,7 +128,7 @@ _SEED_VARIETY_COLUMNS = (
 
 _PLANTING_COLUMNS = (
     "id, variety_id, bed_id, location, planted_date, quantity, quantity_germinated, notes, "
-    "cell_x, cell_y, seed_lot_id, created_at"
+    "cell_x, cell_y, x_in, y_in, seed_lot_id, created_at"
 )
 
 _SEED_LOT_COLUMNS = "id, variety_id, quantity_on_hand, acquired_date, seed_source, notes, created_at"
@@ -139,8 +145,10 @@ _FARM_EVENT_COLUMNS = "fe.id, fe.event_type, fe.title, fe.start_date, fe.end_dat
 
 
 def _connected_components(rows):
-    "Groups rows sharing a (variety, planted_date) key into clusters of 4-directionally adjacent (cell_x, cell_y)."
-    by_coord = {(row["cell_x"], row["cell_y"]): row for row in rows}
+    """Groups rows sharing a (variety, planted_date) key into clusters of 4-directionally adjacent whole-foot
+    cells, the cells computed from each row's real x_in/y_in position rather than a stored cell_x/cell_y.
+    """
+    by_coord = {(inches_to_cell(row["x_in"]), inches_to_cell(row["y_in"])): row for row in rows}
     visited = set()
     clusters = []
     for coord in by_coord:
@@ -440,7 +448,7 @@ class FarmDatabaseMixin:
             return db_connection.execute(
                 text(
                     "SELECT p.id, p.variety_id, p.bed_id, p.location, p.planted_date, p.quantity, "
-                    "p.quantity_germinated, p.notes, p.cell_x, p.cell_y, p.seed_lot_id, p.created_at, "
+                    "p.quantity_germinated, p.notes, p.cell_x, p.cell_y, p.x_in, p.y_in, p.seed_lot_id, p.created_at, "
                     "sv.name AS variety_name, sv.common_name, "
                     "sv.germination_days_min, sv.germination_days_max, "
                     "sv.days_to_maturity_min, sv.days_to_maturity_max "
@@ -451,19 +459,19 @@ class FarmDatabaseMixin:
             ).mappings().all()
 
     def list_plantings_for_bed(self, bed_id: int):
-        "Joined with seed_varieties, like list_plantings, but scoped to one bed's cell-assigned plantings."
+        "Joined with seed_varieties, like list_plantings, but scoped to one bed's positioned plantings."
         with self.engine.connect() as db_connection:
             return db_connection.execute(
                 text(
                     "SELECT p.id, p.variety_id, p.bed_id, p.location, p.planted_date, p.quantity, "
-                    "p.quantity_germinated, p.notes, p.cell_x, p.cell_y, p.seed_lot_id, p.created_at, "
+                    "p.quantity_germinated, p.notes, p.cell_x, p.cell_y, p.x_in, p.y_in, p.seed_lot_id, p.created_at, "
                     "sv.name AS variety_name, sv.common_name, "
                     "sv.germination_days_min, sv.germination_days_max, "
                     "sv.days_to_maturity_min, sv.days_to_maturity_max "
                     "FROM plantings p "
                     "LEFT JOIN seed_varieties sv ON sv.id = p.variety_id "
                     "WHERE p.bed_id = :bed_id "
-                    "ORDER BY p.cell_y, p.cell_x"
+                    "ORDER BY p.y_in, p.x_in"
                 ),
                 {"bed_id": bed_id},
             ).mappings().all()
@@ -476,26 +484,20 @@ class FarmDatabaseMixin:
             ).mappings().first()
 
     def list_plantings_at_cell(self, bed_id: int, cell_x: int, cell_y: int):
-        "A cell can hold more than one planting -- e.g. interplanting carrots and tomatoes in the same square."
-        with self.engine.connect() as db_connection:
-            return db_connection.execute(
-                text(
-                    "SELECT p.id, p.variety_id, p.bed_id, p.location, p.planted_date, p.quantity, "
-                    "p.quantity_germinated, p.notes, p.cell_x, p.cell_y, p.seed_lot_id, p.created_at, "
-                    "sv.name AS variety_name, sv.common_name, "
-                    "sv.germination_days_min, sv.germination_days_max, "
-                    "sv.days_to_maturity_min, sv.days_to_maturity_max "
-                    "FROM plantings p "
-                    "LEFT JOIN seed_varieties sv ON sv.id = p.variety_id "
-                    "WHERE p.bed_id = :bed_id AND p.cell_x = :cell_x AND p.cell_y = :cell_y "
-                    "ORDER BY p.id"
-                ),
-                {"bed_id": bed_id, "cell_x": cell_x, "cell_y": cell_y},
-            ).mappings().all()
+        """A cell can hold more than one planting -- e.g. interplanting carrots and tomatoes in the same square.
+        The cell is a computed bucket of each planting's real x_in/y_in position, not a stored column.
+        """
+        return [
+            planting
+            for planting in self.list_plantings_for_bed(bed_id)
+            if planting["x_in"] is not None
+            and inches_to_cell(planting["x_in"]) == cell_x
+            and inches_to_cell(planting["y_in"]) == cell_y
+        ]
 
     @staticmethod
     def _normalize_planting_fields(
-        bed_id, location, quantity, quantity_germinated, notes, cell_x=None, cell_y=None, seed_lot_id=None
+        bed_id, location, quantity, quantity_germinated, notes, x_in=None, y_in=None, seed_lot_id=None
     ):
         return {
             "bed_id": bed_id,
@@ -503,8 +505,8 @@ class FarmDatabaseMixin:
             "quantity": quantity,
             "quantity_germinated": quantity_germinated,
             "notes": notes or None,
-            "cell_x": cell_x,
-            "cell_y": cell_y,
+            "x_in": x_in,
+            "y_in": y_in,
             "seed_lot_id": seed_lot_id,
         }
 
@@ -517,21 +519,21 @@ class FarmDatabaseMixin:
         quantity: int = None,
         quantity_germinated: int = None,
         notes: str = None,
-        cell_x: int = None,
-        cell_y: int = None,
+        x_in: float = None,
+        y_in: float = None,
         seed_lot_id: int = None,
     ):
         "Returns the new planting's id. Regenerates its (or its bed's) linked farm_events."
         fields = self._normalize_planting_fields(
-            bed_id, location, quantity, quantity_germinated, notes, cell_x, cell_y, seed_lot_id
+            bed_id, location, quantity, quantity_germinated, notes, x_in, y_in, seed_lot_id
         )
         with self.engine.begin() as db_connection:
             result = db_connection.execute(
                 text(
                     "INSERT INTO plantings (variety_id, bed_id, location, planted_date, quantity, "
-                    "quantity_germinated, notes, cell_x, cell_y, seed_lot_id) "
+                    "quantity_germinated, notes, x_in, y_in, seed_lot_id) "
                     "VALUES (:variety_id, :bed_id, :location, :planted_date, :quantity, "
-                    ":quantity_germinated, :notes, :cell_x, :cell_y, :seed_lot_id)"
+                    ":quantity_germinated, :notes, :x_in, :y_in, :seed_lot_id)"
                 ),
                 {"variety_id": variety_id, "planted_date": planted_date, **fields},
             )
@@ -552,12 +554,12 @@ class FarmDatabaseMixin:
         quantity: int = None,
         quantity_germinated: int = None,
         notes: str = None,
-        cell_x: int = None,
-        cell_y: int = None,
+        x_in: float = None,
+        y_in: float = None,
         seed_lot_id: int = None,
     ):
         fields = self._normalize_planting_fields(
-            bed_id, location, quantity, quantity_germinated, notes, cell_x, cell_y, seed_lot_id
+            bed_id, location, quantity, quantity_germinated, notes, x_in, y_in, seed_lot_id
         )
         with self.engine.begin() as db_connection:
             old_bed_id = db_connection.execute(
@@ -568,7 +570,7 @@ class FarmDatabaseMixin:
                     "UPDATE plantings SET variety_id = :variety_id, planted_date = :planted_date, "
                     "bed_id = :bed_id, location = :location, quantity = :quantity, "
                     "quantity_germinated = :quantity_germinated, notes = :notes, "
-                    "cell_x = :cell_x, cell_y = :cell_y, seed_lot_id = :seed_lot_id WHERE id = :id"
+                    "x_in = :x_in, y_in = :y_in, seed_lot_id = :seed_lot_id WHERE id = :id"
                 ),
                 {"id": planting_id, "variety_id": variety_id, "planted_date": planted_date, **fields},
             )
@@ -641,11 +643,11 @@ class FarmDatabaseMixin:
         )
         cell_plantings = db_connection.execute(
             text(
-                "SELECT p.id, p.variety_id, p.planted_date, p.cell_x, p.cell_y, "
+                "SELECT p.id, p.variety_id, p.planted_date, p.x_in, p.y_in, "
                 "sv.common_name, sv.name, sv.germination_days_min, sv.germination_days_max, "
                 "sv.days_to_maturity_min, sv.days_to_maturity_max "
                 "FROM plantings p JOIN seed_varieties sv ON sv.id = p.variety_id "
-                "WHERE p.bed_id = :bed_id AND p.cell_x IS NOT NULL AND p.cell_y IS NOT NULL"
+                "WHERE p.bed_id = :bed_id AND p.x_in IS NOT NULL AND p.y_in IS NOT NULL"
             ),
             {"bed_id": bed_id},
         ).mappings().all()

@@ -25,6 +25,18 @@ SUN_NEEDS_OPTIONS = ["full_sun", "partial_shade", "full_shade"]
 
 RELATION_OPTIONS = ["companion", "antagonist"]
 
+CELL_SIZE_IN = 12  # the bed detail grid's visual cell size; not the unit of storage (see plantings.x_in/y_in)
+
+
+def cell_to_inches(cell: int):
+    "Converts a whole-foot grid cell coordinate to inches from the bed's origin corner."
+    return cell * CELL_SIZE_IN
+
+
+def inches_to_cell(inches: float):
+    "Converts an inches position back to its containing whole-foot grid cell (floor)."
+    return int(inches // CELL_SIZE_IN)
+
 
 def parse_optional_int(value: str):
     "Returns (ok, int_or_none). ok is False when value is non-blank but not a valid integer."

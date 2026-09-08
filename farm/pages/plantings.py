@@ -3,7 +3,7 @@ from datetime import date
 from fasthtml import common as fast
 
 from farm.layout import layout
-from farm.helpers import parse_optional_int, compute_window
+from farm.helpers import parse_optional_int, compute_window, cell_to_inches
 import db
 
 router = fast.APIRouter()
@@ -249,8 +249,8 @@ def update_planting_route(
         quantity=quantity,
         quantity_germinated=quantity_germinated,
         notes=notes.strip() or None,
-        cell_x=existing["cell_x"],
-        cell_y=existing["cell_y"],
+        x_in=existing["x_in"],
+        y_in=existing["y_in"],
     )
     if existing["bed_id"] is not None:
         return fast.Redirect(f"/beds/{existing['bed_id']}")
@@ -357,8 +357,8 @@ def assign_cell_route(
         quantity=quantity,
         quantity_germinated=quantity_germinated,
         notes=notes.strip() or None,
-        cell_x=x,
-        cell_y=y,
+        x_in=cell_to_inches(x),
+        y_in=cell_to_inches(y),
     )
     return fast.Redirect(f"/beds/{bed_id}")
 

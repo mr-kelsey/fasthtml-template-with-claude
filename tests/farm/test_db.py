@@ -1,5 +1,7 @@
 from datetime import date, timedelta
 
+from sqlalchemy import text
+
 import db
 
 ALL_TIME = ("2000-01-01", "2100-01-01")
@@ -547,7 +549,7 @@ def test_generated_farm_event_includes_variety_name_from_join():
 def test_generated_farm_event_includes_bed_label_from_join():
     variety_id = _add_variety(days_to_maturity_min=60, days_to_maturity_max=70)
     bed_id = _add_bed(label="Tomato Bed")
-    db.add_planting(variety_id, "2026-05-01", bed_id=bed_id, cell_x=0, cell_y=0)
+    db.add_planting(variety_id, "2026-05-01", bed_id=bed_id, x_in=0, y_in=0)
     event = db.list_farm_events_in_range(*ALL_TIME)[0]
     assert event["bed_label"] == "Tomato Bed"
 
@@ -594,8 +596,8 @@ def test_two_adjacent_same_variety_same_date_cells_produce_one_event_pair():
         germination_days_min=5, germination_days_max=10, days_to_maturity_min=60, days_to_maturity_max=70
     )
     bed_id = _add_bed()
-    db.add_planting(variety_id, "2026-05-01", bed_id=bed_id, cell_x=0, cell_y=0)
-    db.add_planting(variety_id, "2026-05-01", bed_id=bed_id, cell_x=1, cell_y=0)
+    db.add_planting(variety_id, "2026-05-01", bed_id=bed_id, x_in=0, y_in=0)
+    db.add_planting(variety_id, "2026-05-01", bed_id=bed_id, x_in=12, y_in=0)
     events = db.list_farm_events_in_range(*ALL_TIME)
     assert sorted(e["event_type"] for e in events) == ["germination-check", "harvest"]
 
@@ -603,8 +605,8 @@ def test_two_adjacent_same_variety_same_date_cells_produce_one_event_pair():
 def test_merged_group_event_links_to_lowest_planting_id_in_the_group():
     variety_id = _add_variety(days_to_maturity_min=60, days_to_maturity_max=70)
     bed_id = _add_bed()
-    first_id = db.add_planting(variety_id, "2026-05-01", bed_id=bed_id, cell_x=0, cell_y=0)
-    db.add_planting(variety_id, "2026-05-01", bed_id=bed_id, cell_x=1, cell_y=0)
+    first_id = db.add_planting(variety_id, "2026-05-01", bed_id=bed_id, x_in=0, y_in=0)
+    db.add_planting(variety_id, "2026-05-01", bed_id=bed_id, x_in=12, y_in=0)
     event = db.list_farm_events_in_range(*ALL_TIME)[0]
     assert event["linked_planting_id"] == first_id
 
@@ -612,16 +614,16 @@ def test_merged_group_event_links_to_lowest_planting_id_in_the_group():
 def test_two_diagonal_cells_do_not_merge():
     variety_id = _add_variety(days_to_maturity_min=60, days_to_maturity_max=70)
     bed_id = _add_bed()
-    db.add_planting(variety_id, "2026-05-01", bed_id=bed_id, cell_x=0, cell_y=0)
-    db.add_planting(variety_id, "2026-05-01", bed_id=bed_id, cell_x=1, cell_y=1)
+    db.add_planting(variety_id, "2026-05-01", bed_id=bed_id, x_in=0, y_in=0)
+    db.add_planting(variety_id, "2026-05-01", bed_id=bed_id, x_in=12, y_in=12)
     assert len(db.list_farm_events_in_range(*ALL_TIME)) == 2
 
 
 def test_two_adjacent_cells_with_different_planted_dates_do_not_merge():
     variety_id = _add_variety(days_to_maturity_min=60, days_to_maturity_max=70)
     bed_id = _add_bed()
-    db.add_planting(variety_id, "2026-05-01", bed_id=bed_id, cell_x=0, cell_y=0)
-    db.add_planting(variety_id, "2026-05-15", bed_id=bed_id, cell_x=1, cell_y=0)
+    db.add_planting(variety_id, "2026-05-01", bed_id=bed_id, x_in=0, y_in=0)
+    db.add_planting(variety_id, "2026-05-15", bed_id=bed_id, x_in=12, y_in=0)
     assert len(db.list_farm_events_in_range(*ALL_TIME)) == 2
 
 
@@ -633,26 +635,26 @@ def test_two_adjacent_cells_with_different_varieties_do_not_merge():
         common_name="Pepper", variety_name="Bell", days_to_maturity_min=60, days_to_maturity_max=70
     )
     bed_id = _add_bed()
-    db.add_planting(variety_a, "2026-05-01", bed_id=bed_id, cell_x=0, cell_y=0)
-    db.add_planting(variety_b, "2026-05-01", bed_id=bed_id, cell_x=1, cell_y=0)
+    db.add_planting(variety_a, "2026-05-01", bed_id=bed_id, x_in=0, y_in=0)
+    db.add_planting(variety_b, "2026-05-01", bed_id=bed_id, x_in=12, y_in=0)
     assert len(db.list_farm_events_in_range(*ALL_TIME)) == 2
 
 
 def test_three_contiguous_cells_produce_one_event_before_clearing_middle():
     variety_id = _add_variety(days_to_maturity_min=60, days_to_maturity_max=70)
     bed_id = _add_bed()
-    db.add_planting(variety_id, "2026-05-01", bed_id=bed_id, cell_x=0, cell_y=0)
-    db.add_planting(variety_id, "2026-05-01", bed_id=bed_id, cell_x=1, cell_y=0)
-    db.add_planting(variety_id, "2026-05-01", bed_id=bed_id, cell_x=2, cell_y=0)
+    db.add_planting(variety_id, "2026-05-01", bed_id=bed_id, x_in=0, y_in=0)
+    db.add_planting(variety_id, "2026-05-01", bed_id=bed_id, x_in=12, y_in=0)
+    db.add_planting(variety_id, "2026-05-01", bed_id=bed_id, x_in=24, y_in=0)
     assert len(db.list_farm_events_in_range(*ALL_TIME)) == 1
 
 
 def test_clearing_middle_cell_splits_merged_group_into_two():
     variety_id = _add_variety(days_to_maturity_min=60, days_to_maturity_max=70)
     bed_id = _add_bed()
-    db.add_planting(variety_id, "2026-05-01", bed_id=bed_id, cell_x=0, cell_y=0)
-    middle_id = db.add_planting(variety_id, "2026-05-01", bed_id=bed_id, cell_x=1, cell_y=0)
-    db.add_planting(variety_id, "2026-05-01", bed_id=bed_id, cell_x=2, cell_y=0)
+    db.add_planting(variety_id, "2026-05-01", bed_id=bed_id, x_in=0, y_in=0)
+    middle_id = db.add_planting(variety_id, "2026-05-01", bed_id=bed_id, x_in=12, y_in=0)
+    db.add_planting(variety_id, "2026-05-01", bed_id=bed_id, x_in=24, y_in=0)
     db.delete_planting(middle_id)
     assert len(db.list_farm_events_in_range(*ALL_TIME)) == 2
 
@@ -662,12 +664,28 @@ def test_list_plantings_for_bed_returns_empty_list_when_none_exist():
     assert db.list_plantings_for_bed(bed_id) == []
 
 
-def test_list_plantings_for_bed_includes_cell_coordinates():
+def test_list_plantings_for_bed_includes_inch_position():
     variety_id = _add_variety()
     bed_id = _add_bed()
-    db.add_planting(variety_id, "2026-05-01", bed_id=bed_id, cell_x=2, cell_y=3)
+    db.add_planting(variety_id, "2026-05-01", bed_id=bed_id, x_in=24, y_in=36)
     planting = db.list_plantings_for_bed(bed_id)[0]
-    assert (planting["cell_x"], planting["cell_y"]) == (2, 3)
+    assert (planting["x_in"], planting["y_in"]) == (24, 36)
+
+
+def test_init_db_backfills_x_in_y_in_from_legacy_cell_columns():
+    variety_id = _add_variety()
+    bed_id = _add_bed()
+    with db.engine.begin() as db_connection:
+        db_connection.execute(
+            text(
+                "INSERT INTO plantings (variety_id, bed_id, planted_date, cell_x, cell_y) "
+                "VALUES (:variety_id, :bed_id, '2026-05-01', 2, 3)"
+            ),
+            {"variety_id": variety_id, "bed_id": bed_id},
+        )
+    db.init_db()
+    planting = db.list_plantings_for_bed(bed_id)[0]
+    assert (planting["x_in"], planting["y_in"]) == (24, 36)
 
 
 def test_list_plantings_for_bed_excludes_plantings_in_other_beds():
@@ -677,14 +695,14 @@ def test_list_plantings_for_bed_excludes_plantings_in_other_beds():
     plots_by_name = {p["name"]: p["id"] for p in db.list_land_plots()}
     bed_id = _add_bed(plot_id=plots_by_name["Plot A"])
     other_bed_id = _add_bed(plot_id=plots_by_name["Plot B"], label="Bed 2")
-    db.add_planting(variety_id, "2026-05-01", bed_id=other_bed_id, cell_x=0, cell_y=0)
+    db.add_planting(variety_id, "2026-05-01", bed_id=other_bed_id, x_in=0, y_in=0)
     assert db.list_plantings_for_bed(bed_id) == []
 
 
 def test_list_plantings_at_cell_returns_matching_planting():
     variety_id = _add_variety()
     bed_id = _add_bed()
-    planting_id = db.add_planting(variety_id, "2026-05-01", bed_id=bed_id, cell_x=1, cell_y=2)
+    planting_id = db.add_planting(variety_id, "2026-05-01", bed_id=bed_id, x_in=12, y_in=24)
     assert db.list_plantings_at_cell(bed_id, 1, 2)[0]["id"] == planting_id
 
 
@@ -698,8 +716,8 @@ def test_list_plantings_at_cell_returns_multiple_interplanted_varieties():
     variety_a = _add_variety(common_name="Tomato", variety_name="Cherokee Purple")
     variety_b = _add_variety(common_name="Carrot", variety_name="Danvers")
     bed_id = _add_bed()
-    db.add_planting(variety_a, "2026-05-01", bed_id=bed_id, cell_x=0, cell_y=0)
-    db.add_planting(variety_b, "2026-05-01", bed_id=bed_id, cell_x=0, cell_y=0)
+    db.add_planting(variety_a, "2026-05-01", bed_id=bed_id, x_in=0, y_in=0)
+    db.add_planting(variety_b, "2026-05-01", bed_id=bed_id, x_in=0, y_in=0)
     assert len(db.list_plantings_at_cell(bed_id, 0, 0)) == 2
 
 
@@ -711,6 +729,6 @@ def test_interplanted_cell_generates_separate_events_per_variety():
         common_name="Carrot", variety_name="Danvers", days_to_maturity_min=60, days_to_maturity_max=70
     )
     bed_id = _add_bed()
-    db.add_planting(variety_a, "2026-05-01", bed_id=bed_id, cell_x=0, cell_y=0)
-    db.add_planting(variety_b, "2026-05-01", bed_id=bed_id, cell_x=0, cell_y=0)
+    db.add_planting(variety_a, "2026-05-01", bed_id=bed_id, x_in=0, y_in=0)
+    db.add_planting(variety_b, "2026-05-01", bed_id=bed_id, x_in=0, y_in=0)
     assert len(db.list_farm_events_in_range(*ALL_TIME)) == 2
