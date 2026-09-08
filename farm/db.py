@@ -36,6 +36,28 @@ SCHEMA_STATEMENTS = [
         created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
     )
     """,
+    ("seed_varieties", "soil_type", "TEXT"),
+    ("seed_varieties", "soil_ph_min", "REAL"),
+    ("seed_varieties", "soil_ph_max", "REAL"),
+    ("seed_varieties", "feeding_frequency_days", "INTEGER"),
+    ("seed_varieties", "growth_npk_n", "REAL"),
+    ("seed_varieties", "growth_npk_p", "REAL"),
+    ("seed_varieties", "growth_npk_k", "REAL"),
+    ("seed_varieties", "produce_npk_n", "REAL"),
+    ("seed_varieties", "produce_npk_p", "REAL"),
+    ("seed_varieties", "produce_npk_k", "REAL"),
+    """
+    CREATE TABLE IF NOT EXISTS seed_lots (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        variety_id INTEGER NOT NULL,
+        quantity_on_hand INTEGER,
+        acquired_date TEXT,
+        seed_source TEXT,
+        notes TEXT,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
+    """,
+    ("plantings", "seed_lot_id", "INTEGER"),
     """
     CREATE TABLE IF NOT EXISTS land_plots (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -79,12 +101,21 @@ _AGRONOMIC_COLUMNS = (
     "spacing_in, sun_needs, water_needs"
 )
 
-_SEED_VARIETY_COLUMNS = f"id, common_name, name, plant_family, genus, species, {_AGRONOMIC_COLUMNS}, created_at"
+_SOIL_FEEDING_COLUMNS = (
+    "soil_type, soil_ph_min, soil_ph_max, feeding_frequency_days, "
+    "growth_npk_n, growth_npk_p, growth_npk_k, produce_npk_n, produce_npk_p, produce_npk_k"
+)
+
+_SEED_VARIETY_COLUMNS = (
+    f"id, common_name, name, plant_family, genus, species, {_AGRONOMIC_COLUMNS}, {_SOIL_FEEDING_COLUMNS}, created_at"
+)
 
 _PLANTING_COLUMNS = (
     "id, variety_id, bed_id, location, planted_date, quantity, quantity_germinated, notes, "
-    "cell_x, cell_y, created_at"
+    "cell_x, cell_y, seed_lot_id, created_at"
 )
+
+_SEED_LOT_COLUMNS = "id, variety_id, quantity_on_hand, acquired_date, seed_source, notes, created_at"
 
 _LAND_PLOT_COLUMNS = "id, name, width_ft, length_ft, created_at"
 
@@ -139,6 +170,33 @@ def _agronomic_fields(
     }
 
 
+def _soil_feeding_fields(
+    soil_type: str,
+    soil_ph_min: float,
+    soil_ph_max: float,
+    feeding_frequency_days: int,
+    growth_npk_n: float,
+    growth_npk_p: float,
+    growth_npk_k: float,
+    produce_npk_n: float,
+    produce_npk_p: float,
+    produce_npk_k: float,
+):
+    "Builds the dict of the soil/feeding columns shared by every seed_varieties row."
+    return {
+        "soil_type": soil_type or None,
+        "soil_ph_min": soil_ph_min,
+        "soil_ph_max": soil_ph_max,
+        "feeding_frequency_days": feeding_frequency_days,
+        "growth_npk_n": growth_npk_n,
+        "growth_npk_p": growth_npk_p,
+        "growth_npk_k": growth_npk_k,
+        "produce_npk_n": produce_npk_n,
+        "produce_npk_p": produce_npk_p,
+        "produce_npk_k": produce_npk_k,
+    }
+
+
 class FarmDatabaseMixin:
     "Farm-planning schema (seed_varieties/plantings/land_plots/beds/farm_events) and queries. Relies on self.engine from the core Database."
 
@@ -171,20 +229,38 @@ class FarmDatabaseMixin:
         spacing_in: int = None,
         sun_needs: str = None,
         water_needs: str = None,
+        soil_type: str = None,
+        soil_ph_min: float = None,
+        soil_ph_max: float = None,
+        feeding_frequency_days: int = None,
+        growth_npk_n: float = None,
+        growth_npk_p: float = None,
+        growth_npk_k: float = None,
+        produce_npk_n: float = None,
+        produce_npk_p: float = None,
+        produce_npk_k: float = None,
     ):
         fields = _agronomic_fields(
             germination_days_min, germination_days_max, days_to_maturity_min, days_to_maturity_max,
             spacing_in, sun_needs, water_needs,
         )
+        fields.update(_soil_feeding_fields(
+            soil_type, soil_ph_min, soil_ph_max, feeding_frequency_days,
+            growth_npk_n, growth_npk_p, growth_npk_k, produce_npk_n, produce_npk_p, produce_npk_k,
+        ))
         with self.engine.begin() as db_connection:
             db_connection.execute(
                 text(
                     "INSERT INTO seed_varieties (common_name, name, plant_family, genus, species, "
                     "germination_days_min, germination_days_max, days_to_maturity_min, days_to_maturity_max, "
-                    "spacing_in, sun_needs, water_needs) "
+                    "spacing_in, sun_needs, water_needs, "
+                    "soil_type, soil_ph_min, soil_ph_max, feeding_frequency_days, "
+                    "growth_npk_n, growth_npk_p, growth_npk_k, produce_npk_n, produce_npk_p, produce_npk_k) "
                     "VALUES (:common_name, :name, :plant_family, :genus, :species, "
                     ":germination_days_min, :germination_days_max, :days_to_maturity_min, :days_to_maturity_max, "
-                    ":spacing_in, :sun_needs, :water_needs)"
+                    ":spacing_in, :sun_needs, :water_needs, "
+                    ":soil_type, :soil_ph_min, :soil_ph_max, :feeding_frequency_days, "
+                    ":growth_npk_n, :growth_npk_p, :growth_npk_k, :produce_npk_n, :produce_npk_p, :produce_npk_k)"
                 ),
                 {
                     "common_name": common_name, "name": name, "plant_family": plant_family,
@@ -207,11 +283,25 @@ class FarmDatabaseMixin:
         spacing_in: int = None,
         sun_needs: str = None,
         water_needs: str = None,
+        soil_type: str = None,
+        soil_ph_min: float = None,
+        soil_ph_max: float = None,
+        feeding_frequency_days: int = None,
+        growth_npk_n: float = None,
+        growth_npk_p: float = None,
+        growth_npk_k: float = None,
+        produce_npk_n: float = None,
+        produce_npk_p: float = None,
+        produce_npk_k: float = None,
     ):
         fields = _agronomic_fields(
             germination_days_min, germination_days_max, days_to_maturity_min, days_to_maturity_max,
             spacing_in, sun_needs, water_needs,
         )
+        fields.update(_soil_feeding_fields(
+            soil_type, soil_ph_min, soil_ph_max, feeding_frequency_days,
+            growth_npk_n, growth_npk_p, growth_npk_k, produce_npk_n, produce_npk_p, produce_npk_k,
+        ))
         with self.engine.begin() as db_connection:
             db_connection.execute(
                 text(
@@ -219,7 +309,12 @@ class FarmDatabaseMixin:
                     "plant_family = :plant_family, genus = :genus, species = :species, "
                     "germination_days_min = :germination_days_min, germination_days_max = :germination_days_max, "
                     "days_to_maturity_min = :days_to_maturity_min, days_to_maturity_max = :days_to_maturity_max, "
-                    "spacing_in = :spacing_in, sun_needs = :sun_needs, water_needs = :water_needs WHERE id = :id"
+                    "spacing_in = :spacing_in, sun_needs = :sun_needs, water_needs = :water_needs, "
+                    "soil_type = :soil_type, soil_ph_min = :soil_ph_min, soil_ph_max = :soil_ph_max, "
+                    "feeding_frequency_days = :feeding_frequency_days, "
+                    "growth_npk_n = :growth_npk_n, growth_npk_p = :growth_npk_p, growth_npk_k = :growth_npk_k, "
+                    "produce_npk_n = :produce_npk_n, produce_npk_p = :produce_npk_p, produce_npk_k = :produce_npk_k "
+                    "WHERE id = :id"
                 ),
                 {
                     "id": variety_id, "common_name": common_name, "name": name, "plant_family": plant_family,
@@ -231,13 +326,76 @@ class FarmDatabaseMixin:
         with self.engine.begin() as db_connection:
             db_connection.execute(text("DELETE FROM seed_varieties WHERE id = :id"), {"id": variety_id})
 
+    def list_seed_lots_for_variety(self, variety_id: int):
+        with self.engine.connect() as db_connection:
+            return db_connection.execute(
+                text(
+                    f"SELECT {_SEED_LOT_COLUMNS} FROM seed_lots WHERE variety_id = :variety_id "
+                    "ORDER BY acquired_date DESC, id DESC"
+                ),
+                {"variety_id": variety_id},
+            ).mappings().all()
+
+    def get_seed_lot(self, seed_lot_id: int):
+        with self.engine.connect() as db_connection:
+            return db_connection.execute(
+                text(f"SELECT {_SEED_LOT_COLUMNS} FROM seed_lots WHERE id = :id"),
+                {"id": seed_lot_id},
+            ).mappings().first()
+
+    def add_seed_lot(
+        self,
+        variety_id: int,
+        quantity_on_hand: int = None,
+        acquired_date: str = None,
+        seed_source: str = None,
+        notes: str = None,
+    ):
+        with self.engine.begin() as db_connection:
+            db_connection.execute(
+                text(
+                    "INSERT INTO seed_lots (variety_id, quantity_on_hand, acquired_date, seed_source, notes) "
+                    "VALUES (:variety_id, :quantity_on_hand, :acquired_date, :seed_source, :notes)"
+                ),
+                {
+                    "variety_id": variety_id, "quantity_on_hand": quantity_on_hand,
+                    "acquired_date": acquired_date or None, "seed_source": seed_source or None,
+                    "notes": notes or None,
+                },
+            )
+
+    def update_seed_lot(
+        self,
+        seed_lot_id: int,
+        quantity_on_hand: int = None,
+        acquired_date: str = None,
+        seed_source: str = None,
+        notes: str = None,
+    ):
+        with self.engine.begin() as db_connection:
+            db_connection.execute(
+                text(
+                    "UPDATE seed_lots SET quantity_on_hand = :quantity_on_hand, acquired_date = :acquired_date, "
+                    "seed_source = :seed_source, notes = :notes WHERE id = :id"
+                ),
+                {
+                    "id": seed_lot_id, "quantity_on_hand": quantity_on_hand,
+                    "acquired_date": acquired_date or None, "seed_source": seed_source or None,
+                    "notes": notes or None,
+                },
+            )
+
+    def delete_seed_lot(self, seed_lot_id: int):
+        with self.engine.begin() as db_connection:
+            db_connection.execute(text("DELETE FROM seed_lots WHERE id = :id"), {"id": seed_lot_id})
+
     def list_plantings(self):
         "Joined with seed_varieties so callers get the variety's common name and maturity data for expected-window math."
         with self.engine.connect() as db_connection:
             return db_connection.execute(
                 text(
                     "SELECT p.id, p.variety_id, p.bed_id, p.location, p.planted_date, p.quantity, "
-                    "p.quantity_germinated, p.notes, p.cell_x, p.cell_y, p.created_at, "
+                    "p.quantity_germinated, p.notes, p.cell_x, p.cell_y, p.seed_lot_id, p.created_at, "
                     "sv.name AS variety_name, sv.common_name, "
                     "sv.germination_days_min, sv.germination_days_max, "
                     "sv.days_to_maturity_min, sv.days_to_maturity_max "
@@ -253,7 +411,7 @@ class FarmDatabaseMixin:
             return db_connection.execute(
                 text(
                     "SELECT p.id, p.variety_id, p.bed_id, p.location, p.planted_date, p.quantity, "
-                    "p.quantity_germinated, p.notes, p.cell_x, p.cell_y, p.created_at, "
+                    "p.quantity_germinated, p.notes, p.cell_x, p.cell_y, p.seed_lot_id, p.created_at, "
                     "sv.name AS variety_name, sv.common_name, "
                     "sv.germination_days_min, sv.germination_days_max, "
                     "sv.days_to_maturity_min, sv.days_to_maturity_max "
@@ -278,7 +436,7 @@ class FarmDatabaseMixin:
             return db_connection.execute(
                 text(
                     "SELECT p.id, p.variety_id, p.bed_id, p.location, p.planted_date, p.quantity, "
-                    "p.quantity_germinated, p.notes, p.cell_x, p.cell_y, p.created_at, "
+                    "p.quantity_germinated, p.notes, p.cell_x, p.cell_y, p.seed_lot_id, p.created_at, "
                     "sv.name AS variety_name, sv.common_name, "
                     "sv.germination_days_min, sv.germination_days_max, "
                     "sv.days_to_maturity_min, sv.days_to_maturity_max "
@@ -291,7 +449,9 @@ class FarmDatabaseMixin:
             ).mappings().all()
 
     @staticmethod
-    def _normalize_planting_fields(bed_id, location, quantity, quantity_germinated, notes, cell_x=None, cell_y=None):
+    def _normalize_planting_fields(
+        bed_id, location, quantity, quantity_germinated, notes, cell_x=None, cell_y=None, seed_lot_id=None
+    ):
         return {
             "bed_id": bed_id,
             "location": location or None,
@@ -300,6 +460,7 @@ class FarmDatabaseMixin:
             "notes": notes or None,
             "cell_x": cell_x,
             "cell_y": cell_y,
+            "seed_lot_id": seed_lot_id,
         }
 
     def add_planting(
@@ -313,16 +474,19 @@ class FarmDatabaseMixin:
         notes: str = None,
         cell_x: int = None,
         cell_y: int = None,
+        seed_lot_id: int = None,
     ):
         "Returns the new planting's id. Regenerates its (or its bed's) linked farm_events."
-        fields = self._normalize_planting_fields(bed_id, location, quantity, quantity_germinated, notes, cell_x, cell_y)
+        fields = self._normalize_planting_fields(
+            bed_id, location, quantity, quantity_germinated, notes, cell_x, cell_y, seed_lot_id
+        )
         with self.engine.begin() as db_connection:
             result = db_connection.execute(
                 text(
                     "INSERT INTO plantings (variety_id, bed_id, location, planted_date, quantity, "
-                    "quantity_germinated, notes, cell_x, cell_y) "
+                    "quantity_germinated, notes, cell_x, cell_y, seed_lot_id) "
                     "VALUES (:variety_id, :bed_id, :location, :planted_date, :quantity, "
-                    ":quantity_germinated, :notes, :cell_x, :cell_y)"
+                    ":quantity_germinated, :notes, :cell_x, :cell_y, :seed_lot_id)"
                 ),
                 {"variety_id": variety_id, "planted_date": planted_date, **fields},
             )
@@ -345,8 +509,11 @@ class FarmDatabaseMixin:
         notes: str = None,
         cell_x: int = None,
         cell_y: int = None,
+        seed_lot_id: int = None,
     ):
-        fields = self._normalize_planting_fields(bed_id, location, quantity, quantity_germinated, notes, cell_x, cell_y)
+        fields = self._normalize_planting_fields(
+            bed_id, location, quantity, quantity_germinated, notes, cell_x, cell_y, seed_lot_id
+        )
         with self.engine.begin() as db_connection:
             old_bed_id = db_connection.execute(
                 text("SELECT bed_id FROM plantings WHERE id = :id"), {"id": planting_id}
@@ -356,7 +523,7 @@ class FarmDatabaseMixin:
                     "UPDATE plantings SET variety_id = :variety_id, planted_date = :planted_date, "
                     "bed_id = :bed_id, location = :location, quantity = :quantity, "
                     "quantity_germinated = :quantity_germinated, notes = :notes, "
-                    "cell_x = :cell_x, cell_y = :cell_y WHERE id = :id"
+                    "cell_x = :cell_x, cell_y = :cell_y, seed_lot_id = :seed_lot_id WHERE id = :id"
                 ),
                 {"id": planting_id, "variety_id": variety_id, "planted_date": planted_date, **fields},
             )

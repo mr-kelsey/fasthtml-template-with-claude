@@ -74,6 +74,91 @@ def test_add_seed_variety_persists_optional_genus_and_species(client):
     assert "Solanum" in response.text and "lycopersicum" in response.text
 
 
+def test_add_seed_variety_persists_soil_and_feeding_fields(client):
+    client.post(
+        "/seed-varieties",
+        data={
+            "common_name": "Tomato", "name": "Cherokee Purple", "plant_family": "Solanaceae",
+            "soil_type": "loam", "soil_ph_min": "6.0", "soil_ph_max": "6.8",
+            "feeding_frequency_days": "14", "growth_npk": "10-5-5", "produce_npk": "5-10-10",
+        },
+    )
+    response = client.get("/seed-varieties")
+    assert "loam" in response.text and "10-5-5" in response.text and "5-10-10" in response.text
+
+
+def test_add_seed_variety_rejects_non_numeric_soil_ph(client):
+    response = client.post(
+        "/seed-varieties",
+        data={
+            "common_name": "Tomato", "name": "Cherokee Purple", "plant_family": "Solanaceae",
+            "soil_ph_min": "not-a-number",
+        },
+    )
+    assert response.status_code == 422
+
+
+def test_add_seed_variety_rejects_malformed_growth_npk(client):
+    response = client.post(
+        "/seed-varieties",
+        data={
+            "common_name": "Tomato", "name": "Cherokee Purple", "plant_family": "Solanaceae",
+            "growth_npk": "10-5",
+        },
+    )
+    assert response.status_code == 422
+
+
+def test_add_seed_variety_rejects_non_numeric_produce_npk(client):
+    response = client.post(
+        "/seed-varieties",
+        data={
+            "common_name": "Tomato", "name": "Cherokee Purple", "plant_family": "Solanaceae",
+            "produce_npk": "ten-5-5",
+        },
+    )
+    assert response.status_code == 422
+
+
+def test_add_seed_variety_accepts_valid_sun_needs(client):
+    response = client.post(
+        "/seed-varieties",
+        data={"common_name": "Tomato", "name": "Cherokee Purple", "plant_family": "Solanaceae", "sun_needs": "full_sun"},
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+
+
+def test_add_seed_variety_allows_blank_sun_needs(client):
+    response = client.post(
+        "/seed-varieties",
+        data={"common_name": "Tomato", "name": "Cherokee Purple", "plant_family": "Solanaceae", "sun_needs": ""},
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+
+
+def test_add_seed_variety_rejects_invalid_sun_needs(client):
+    response = client.post(
+        "/seed-varieties",
+        data={
+            "common_name": "Tomato", "name": "Cherokee Purple", "plant_family": "Solanaceae",
+            "sun_needs": "kinda-sunny",
+        },
+    )
+    assert response.status_code == 422
+
+
+def test_edit_seed_variety_page_preselects_current_sun_needs(client):
+    client.post(
+        "/seed-varieties",
+        data={"common_name": "Tomato", "name": "Cherokee Purple", "plant_family": "Solanaceae", "sun_needs": "partial_shade"},
+    )
+    variety_id = db.list_seed_varieties()[0]["id"]
+    response = client.get(f"/seed-varieties/{variety_id}/edit")
+    assert '<option value="partial_shade" selected' in response.text
+
+
 def test_edit_seed_variety_updates_name(client):
     client.post(
         "/seed-varieties", data={"common_name": "Tomato", "name": "Original", "plant_family": "Solanaceae"}

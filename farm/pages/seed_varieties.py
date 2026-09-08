@@ -1,7 +1,14 @@
 from fasthtml import common as fast
 
 from farm.layout import layout
-from farm.helpers import parse_agronomic_fields, format_day_range
+from farm.helpers import (
+    parse_agronomic_fields,
+    parse_soil_feeding_fields,
+    validate_sun_needs,
+    format_day_range,
+    format_npk,
+    SUN_NEEDS_OPTIONS,
+)
 import db
 
 router = fast.APIRouter()
@@ -11,6 +18,12 @@ def _optional_value(variety, field):
     if variety is None or variety[field] is None:
         return ""
     return variety[field]
+
+
+def _npk_value(variety, prefix):
+    if variety is None:
+        return ""
+    return format_npk(variety[f"{prefix}_npk_n"], variety[f"{prefix}_npk_p"], variety[f"{prefix}_npk_k"])
 
 
 def _agronomic_form_fields(variety=None):
@@ -42,9 +55,37 @@ def _agronomic_form_fields(variety=None):
         fast.Input(
             name="spacing_in", type="number", placeholder="Spacing (in)", value=_optional_value(variety, "spacing_in")
         ),
-        fast.Input(name="sun_needs", placeholder="Sun needs (optional)", value=_optional_value(variety, "sun_needs")),
+        fast.Select(
+            fast.Option("Sun needs (optional)", value="", selected=_optional_value(variety, "sun_needs") == ""),
+            *[
+                fast.Option(sun_needs, value=sun_needs, selected=_optional_value(variety, "sun_needs") == sun_needs)
+                for sun_needs in SUN_NEEDS_OPTIONS
+            ],
+            name="sun_needs",
+        ),
         fast.Input(
             name="water_needs", placeholder="Water needs (optional)", value=_optional_value(variety, "water_needs")
+        ),
+        fast.Input(name="soil_type", placeholder="Soil type (optional)", value=_optional_value(variety, "soil_type")),
+        fast.Input(
+            name="soil_ph_min", type="number", step="0.1", placeholder="Soil pH (min)",
+            value=_optional_value(variety, "soil_ph_min"),
+        ),
+        fast.Input(
+            name="soil_ph_max", type="number", step="0.1", placeholder="Soil pH (max)",
+            value=_optional_value(variety, "soil_ph_max"),
+        ),
+        fast.Input(
+            name="feeding_frequency_days", type="number", placeholder="Feeding frequency (days)",
+            value=_optional_value(variety, "feeding_frequency_days"),
+        ),
+        fast.Input(
+            name="growth_npk", placeholder="Growth cycle food requirements: N-P-K (e.g. 10-5-5)",
+            value=_npk_value(variety, "growth"),
+        ),
+        fast.Input(
+            name="produce_npk", placeholder="Produce cycle food requirements: N-P-K (e.g. 5-10-10)",
+            value=_npk_value(variety, "produce"),
         ),
     )
 
@@ -88,6 +129,12 @@ def _variety_row(variety):
         fast.Td(variety["spacing_in"] if variety["spacing_in"] is not None else ""),
         fast.Td(variety["sun_needs"] or ""),
         fast.Td(variety["water_needs"] or ""),
+        fast.Td(variety["soil_type"] or ""),
+        fast.Td(variety["soil_ph_min"] if variety["soil_ph_min"] is not None else ""),
+        fast.Td(variety["soil_ph_max"] if variety["soil_ph_max"] is not None else ""),
+        fast.Td(variety["feeding_frequency_days"] if variety["feeding_frequency_days"] is not None else ""),
+        fast.Td(_npk_value(variety, "growth")),
+        fast.Td(_npk_value(variety, "produce")),
         fast.Td(
             fast.A("Edit", href=f"/seed-varieties/{variety['id']}/edit"),
             " ",
@@ -106,7 +153,8 @@ def list_seed_varieties_page():
     varieties = db.list_seed_varieties()
     headers = [
         "Variety", "Common Name", "Family", "Genus", "Species",
-        "Germination (days)", "Maturity (days)", "Spacing (in)", "Sun", "Water", "",
+        "Germination (days)", "Maturity (days)", "Spacing (in)", "Sun", "Water",
+        "Soil", "pH Min", "pH Max", "Feed Freq (days)", "Growth N-P-K", "Produce N-P-K", "",
     ]
     rows = (
         [_variety_row(v) for v in varieties]
@@ -137,6 +185,21 @@ def _validate_required_fields(common_name, name, plant_family):
     return common_name, name, plant_family
 
 
+def _validate_soil_feeding_and_sun(
+    soil_type, soil_ph_min, soil_ph_max, feeding_frequency_days, growth_npk, produce_npk, sun_needs
+):
+    "Returns (soil_feeding_fields_dict, sun_needs_value_or_none) or an error fast.Response."
+    soil_feeding_fields, error = parse_soil_feeding_fields(
+        soil_type, soil_ph_min, soil_ph_max, feeding_frequency_days, growth_npk, produce_npk
+    )
+    if error:
+        return fast.Response(error, status_code=422)
+    sun_needs_value, error = validate_sun_needs(sun_needs)
+    if error:
+        return fast.Response(error, status_code=422)
+    return soil_feeding_fields, sun_needs_value
+
+
 @router("/seed-varieties", methods=["post"])
 def add_seed_variety_route(
     common_name: str,
@@ -151,6 +214,12 @@ def add_seed_variety_route(
     spacing_in: str = "",
     sun_needs: str = "",
     water_needs: str = "",
+    soil_type: str = "",
+    soil_ph_min: str = "",
+    soil_ph_max: str = "",
+    feeding_frequency_days: str = "",
+    growth_npk: str = "",
+    produce_npk: str = "",
 ):
     validated = _validate_required_fields(common_name, name, plant_family)
     if isinstance(validated, fast.Response):
@@ -161,15 +230,22 @@ def add_seed_variety_route(
     )
     if error:
         return fast.Response(error, status_code=422)
+    validated_soil = _validate_soil_feeding_and_sun(
+        soil_type, soil_ph_min, soil_ph_max, feeding_frequency_days, growth_npk, produce_npk, sun_needs
+    )
+    if isinstance(validated_soil, fast.Response):
+        return validated_soil
+    soil_feeding_fields, sun_needs_value = validated_soil
     db.add_seed_variety(
         common_name,
         name,
         plant_family,
         genus=genus.strip() or None,
         species=species.strip() or None,
-        sun_needs=sun_needs.strip() or None,
+        sun_needs=sun_needs_value,
         water_needs=water_needs.strip() or None,
         **fields,
+        **soil_feeding_fields,
     )
     return fast.Redirect("/seed-varieties")
 
@@ -215,6 +291,12 @@ def update_seed_variety_route(
     spacing_in: str = "",
     sun_needs: str = "",
     water_needs: str = "",
+    soil_type: str = "",
+    soil_ph_min: str = "",
+    soil_ph_max: str = "",
+    feeding_frequency_days: str = "",
+    growth_npk: str = "",
+    produce_npk: str = "",
 ):
     validated = _validate_required_fields(common_name, name, plant_family)
     if isinstance(validated, fast.Response):
@@ -225,6 +307,12 @@ def update_seed_variety_route(
     )
     if error:
         return fast.Response(error, status_code=422)
+    validated_soil = _validate_soil_feeding_and_sun(
+        soil_type, soil_ph_min, soil_ph_max, feeding_frequency_days, growth_npk, produce_npk, sun_needs
+    )
+    if isinstance(validated_soil, fast.Response):
+        return validated_soil
+    soil_feeding_fields, sun_needs_value = validated_soil
     db.update_seed_variety(
         variety_id,
         common_name,
@@ -232,9 +320,10 @@ def update_seed_variety_route(
         plant_family,
         genus=genus.strip() or None,
         species=species.strip() or None,
-        sun_needs=sun_needs.strip() or None,
+        sun_needs=sun_needs_value,
         water_needs=water_needs.strip() or None,
         **fields,
+        **soil_feeding_fields,
     )
     return fast.Redirect("/seed-varieties")
 

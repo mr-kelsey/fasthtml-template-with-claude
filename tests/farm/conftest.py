@@ -25,6 +25,16 @@ def _clean_plantings():
 
 
 @pytest.fixture(autouse=True)
+def _clean_seed_lots():
+    "Start and end each test with an empty seed_lots table (cleaned before seed_varieties, its parent)."
+    with db.engine.begin() as db_connection:
+        db_connection.execute(text("DELETE FROM seed_lots"))
+    yield
+    with db.engine.begin() as db_connection:
+        db_connection.execute(text("DELETE FROM seed_lots"))
+
+
+@pytest.fixture(autouse=True)
 def _clean_seed_varieties():
     "Start and end each test with an empty seed_varieties table in the isolated test database (.env.test)."
     with db.engine.begin() as db_connection:

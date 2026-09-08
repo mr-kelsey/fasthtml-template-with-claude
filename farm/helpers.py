@@ -10,6 +10,19 @@ AGRONOMIC_FIELD_LABELS = {
     "spacing_in": "Spacing (in)",
 }
 
+SOIL_FEEDING_FIELD_LABELS = {
+    "soil_ph_min": "Soil pH (min)",
+    "soil_ph_max": "Soil pH (max)",
+    "feeding_frequency_days": "Feeding frequency (days)",
+}
+
+NPK_FIELD_LABELS = {
+    "growth_npk": "Growth cycle food requirements: N-P-K",
+    "produce_npk": "Produce cycle food requirements: N-P-K",
+}
+
+SUN_NEEDS_OPTIONS = ["full_sun", "partial_shade", "full_shade"]
+
 
 def parse_optional_int(value: str):
     "Returns (ok, int_or_none). ok is False when value is non-blank but not a valid integer."
@@ -17,6 +30,16 @@ def parse_optional_int(value: str):
         return True, None
     try:
         return True, int(value)
+    except ValueError:
+        return False, None
+
+
+def parse_optional_float(value: str):
+    "Returns (ok, float_or_none). ok is False when value is non-blank but not a valid float."
+    if value is None or value.strip() == "":
+        return True, None
+    try:
+        return True, float(value)
     except ValueError:
         return False, None
 
@@ -53,6 +76,65 @@ def parse_agronomic_fields(
             return None, f"{AGRONOMIC_FIELD_LABELS[field_name]} must be a number."
         parsed[field_name] = parsed_value
     return parsed, None
+
+
+def parse_npk_formula(value: str):
+    "Parses an 'N-P-K' formula string (e.g. '10-5-5') into (n, p, k) floats. (True, (None, None, None)) when blank."
+    if value is None or value.strip() == "":
+        return True, (None, None, None)
+    parts = value.strip().split("-")
+    if len(parts) != 3:
+        return False, (None, None, None)
+    try:
+        return True, tuple(float(part) for part in parts)
+    except ValueError:
+        return False, (None, None, None)
+
+
+def _format_npk_component(value: float):
+    return str(int(value)) if value == int(value) else str(value)
+
+
+def format_npk(n: float, p: float, k: float):
+    "Renders a growth/produce N-P-K triad back into the 'N-P-K' formula string, or '' when all unset."
+    if n is None and p is None and k is None:
+        return ""
+    return "-".join(_format_npk_component(v) if v is not None else "" for v in (n, p, k))
+
+
+def parse_soil_feeding_fields(
+    soil_type: str,
+    soil_ph_min: str,
+    soil_ph_max: str,
+    feeding_frequency_days: str,
+    growth_npk: str,
+    produce_npk: str,
+):
+    "Returns (fields_dict, None) or (None, error_message) if a numeric field or N-P-K formula is invalid."
+    parsed = {"soil_type": soil_type.strip() or None if soil_type is not None else None}
+    ok, parsed["feeding_frequency_days"] = parse_optional_int(feeding_frequency_days)
+    if not ok:
+        return None, f"{SOIL_FEEDING_FIELD_LABELS['feeding_frequency_days']} must be a number."
+    for field_name, value in (("soil_ph_min", soil_ph_min), ("soil_ph_max", soil_ph_max)):
+        ok, parsed_value = parse_optional_float(value)
+        if not ok:
+            return None, f"{SOIL_FEEDING_FIELD_LABELS[field_name]} must be a number."
+        parsed[field_name] = parsed_value
+    for prefix, value in (("growth", growth_npk), ("produce", produce_npk)):
+        ok, (n, p, k) = parse_npk_formula(value)
+        if not ok:
+            return None, f"{NPK_FIELD_LABELS[f'{prefix}_npk']} must be in N-P-K format (e.g. 10-5-5)."
+        parsed[f"{prefix}_npk_n"], parsed[f"{prefix}_npk_p"], parsed[f"{prefix}_npk_k"] = n, p, k
+    return parsed, None
+
+
+def validate_sun_needs(value: str):
+    "Returns (value_or_none, None) or (None, error_message) if value is non-blank but not in SUN_NEEDS_OPTIONS."
+    if value is None or value.strip() == "":
+        return None, None
+    if value not in SUN_NEEDS_OPTIONS:
+        return None, f"Sun needs must be one of: {', '.join(SUN_NEEDS_OPTIONS)}."
+    return value, None
 
 
 def compute_window(planted_date: str, days_min: int, days_max: int):

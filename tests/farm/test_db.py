@@ -29,6 +29,41 @@ def test_add_seed_variety_defaults_optional_fields_to_none():
     assert (variety["genus"], variety["species"], variety["germination_days_min"]) == (None, None, None)
 
 
+def test_add_seed_variety_persists_soil_and_feeding_fields():
+    db.add_seed_variety(
+        "Tomato", "Cherokee Purple", "Solanaceae",
+        soil_type="loam", soil_ph_min=6.0, soil_ph_max=6.8, feeding_frequency_days=14,
+        growth_npk_n=10.0, growth_npk_p=5.0, growth_npk_k=5.0,
+        produce_npk_n=5.0, produce_npk_p=10.0, produce_npk_k=10.0,
+    )
+    variety = db.list_seed_varieties()[0]
+    assert (variety["soil_type"], variety["soil_ph_min"], variety["soil_ph_max"]) == ("loam", 6.0, 6.8)
+    assert variety["feeding_frequency_days"] == 14
+    assert (variety["growth_npk_n"], variety["growth_npk_p"], variety["growth_npk_k"]) == (10.0, 5.0, 5.0)
+    assert (variety["produce_npk_n"], variety["produce_npk_p"], variety["produce_npk_k"]) == (5.0, 10.0, 10.0)
+
+
+def test_add_seed_variety_defaults_soil_and_feeding_fields_to_none():
+    db.add_seed_variety("Tomato", "Cherokee Purple", "Solanaceae")
+    variety = db.list_seed_varieties()[0]
+    assert (variety["soil_type"], variety["soil_ph_min"], variety["feeding_frequency_days"], variety["growth_npk_n"]) == (
+        None, None, None, None,
+    )
+
+
+def test_update_seed_variety_changes_soil_and_feeding_fields():
+    db.add_seed_variety("Tomato", "Original", "Solanaceae")
+    variety_id = db.list_seed_varieties()[0]["id"]
+    db.update_seed_variety(variety_id, "Tomato", "Original", "Solanaceae", soil_type="clay", feeding_frequency_days=21)
+    variety = db.get_seed_variety(variety_id)
+    assert (variety["soil_type"], variety["feeding_frequency_days"]) == ("clay", 21)
+
+
+def test_add_seed_variety_persists_sun_needs():
+    db.add_seed_variety("Tomato", "Cherokee Purple", "Solanaceae", sun_needs="full_sun")
+    assert db.list_seed_varieties()[0]["sun_needs"] == "full_sun"
+
+
 def test_seed_varieties_ordered_by_common_name_then_name():
     db.add_seed_variety("Zucchini", "Black Beauty", "Cucurbitaceae")
     db.add_seed_variety("Basil", "Genovese", "Lamiaceae")
@@ -69,6 +104,70 @@ def _add_variety(common_name="Tomato", variety_name="Cherokee Purple", plant_fam
     return db.list_seed_varieties()[0]["id"]
 
 
+def test_list_seed_lots_for_variety_returns_empty_list_when_none_exist():
+    variety_id = _add_variety()
+    assert db.list_seed_lots_for_variety(variety_id) == []
+
+
+def test_add_seed_lot_persists_quantity_source_and_date():
+    variety_id = _add_variety()
+    db.add_seed_lot(variety_id, quantity_on_hand=50, acquired_date="2026-01-15", seed_source="Baker Creek")
+    lot = db.list_seed_lots_for_variety(variety_id)[0]
+    assert (lot["quantity_on_hand"], lot["acquired_date"], lot["seed_source"]) == (50, "2026-01-15", "Baker Creek")
+
+
+def test_add_seed_lot_defaults_optional_fields_to_none():
+    variety_id = _add_variety()
+    db.add_seed_lot(variety_id)
+    lot = db.list_seed_lots_for_variety(variety_id)[0]
+    assert (lot["quantity_on_hand"], lot["acquired_date"], lot["seed_source"], lot["notes"]) == (None, None, None, None)
+
+
+def test_seed_lots_for_variety_ordered_most_recently_acquired_first():
+    variety_id = _add_variety()
+    db.add_seed_lot(variety_id, acquired_date="2025-01-01")
+    db.add_seed_lot(variety_id, acquired_date="2026-01-01")
+    assert [lot["acquired_date"] for lot in db.list_seed_lots_for_variety(variety_id)] == ["2026-01-01", "2025-01-01"]
+
+
+def test_list_seed_lots_for_variety_excludes_other_varieties_lots():
+    variety_a = _add_variety(common_name="Tomato", variety_name="Cherokee Purple")
+    variety_b = _add_variety(common_name="Pepper", variety_name="Bell")
+    db.add_seed_lot(variety_b)
+    assert db.list_seed_lots_for_variety(variety_a) == []
+
+
+def test_get_seed_lot_returns_matching_row():
+    variety_id = _add_variety()
+    db.add_seed_lot(variety_id, seed_source="Baker Creek")
+    lot_id = db.list_seed_lots_for_variety(variety_id)[0]["id"]
+    assert db.get_seed_lot(lot_id)["seed_source"] == "Baker Creek"
+
+
+def test_get_seed_lot_returns_none_when_not_found():
+    assert db.get_seed_lot(999999) is None
+
+
+def test_update_seed_lot_changes_quantity_on_hand():
+    variety_id = _add_variety()
+    db.add_seed_lot(variety_id, quantity_on_hand=50)
+    lot_id = db.list_seed_lots_for_variety(variety_id)[0]["id"]
+    db.update_seed_lot(lot_id, quantity_on_hand=30)
+    assert db.get_seed_lot(lot_id)["quantity_on_hand"] == 30
+
+
+def test_delete_seed_lot_removes_it():
+    variety_id = _add_variety()
+    db.add_seed_lot(variety_id)
+    lot_id = db.list_seed_lots_for_variety(variety_id)[0]["id"]
+    db.delete_seed_lot(lot_id)
+    assert db.list_seed_lots_for_variety(variety_id) == []
+
+
+def test_delete_nonexistent_seed_lot_is_a_noop():
+    db.delete_seed_lot(999999)
+
+
 def test_list_plantings_returns_empty_list_when_none_exist():
     assert db.list_plantings() == []
 
@@ -85,6 +184,29 @@ def test_add_planting_defaults_bed_id_and_location_to_none():
     db.add_planting(variety_id, "2026-05-01")
     planting = db.list_plantings()[0]
     assert (planting["bed_id"], planting["location"]) == (None, None)
+
+
+def test_add_planting_persists_seed_lot_id():
+    variety_id = _add_variety()
+    db.add_seed_lot(variety_id)
+    seed_lot_id = db.list_seed_lots_for_variety(variety_id)[0]["id"]
+    db.add_planting(variety_id, "2026-05-01", seed_lot_id=seed_lot_id)
+    assert db.list_plantings()[0]["seed_lot_id"] == seed_lot_id
+
+
+def test_add_planting_defaults_seed_lot_id_to_none():
+    variety_id = _add_variety()
+    db.add_planting(variety_id, "2026-05-01")
+    assert db.list_plantings()[0]["seed_lot_id"] is None
+
+
+def test_update_planting_changes_seed_lot_id():
+    variety_id = _add_variety()
+    db.add_seed_lot(variety_id)
+    seed_lot_id = db.list_seed_lots_for_variety(variety_id)[0]["id"]
+    planting_id = db.add_planting(variety_id, "2026-05-01")
+    db.update_planting(planting_id, variety_id, "2026-05-01", seed_lot_id=seed_lot_id)
+    assert db.get_planting(planting_id)["seed_lot_id"] == seed_lot_id
 
 
 def test_plantings_ordered_by_planted_date_descending():
