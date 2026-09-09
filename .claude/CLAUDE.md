@@ -27,6 +27,8 @@ pytest tests/farm/                                  # farm subdomain's suite sta
 ```
 Uses `.env.test` (not `.env`) via `db.Database(".env.test")`, swapped in by `tests/conftest.py` before `main`/pages are imported — truncates every table in its own db (never the real one configured in `.env`), core tables via `tests/conftest.py`'s fixtures and farm tables via `tests/farm/conftest.py`'s (pytest merges both automatically for anything under `tests/farm/`). `tests/__init__.py`/`tests/farm/__init__.py` exist so pytest's default import mode can tell `tests.test_db`/`tests.test_routes` apart from `tests.farm.test_db`/`tests.farm.test_routes`.
 
+`tests/farm/test_land_map_js.py`/`test_bed_detail_js.py` drive the hand-rolled `static/land-map.js`/`bed-detail.js` for real, via Playwright against a live `main.app` (`tests/farm/conftest.py`'s `live_server_url`/`browser`/`page` fixtures — a real `uvicorn.Server` in a background thread, sharing the same `.env.test` engine, so the existing per-test cleanup fixtures still apply). Needs `playwright install chromium` once if not already installed.
+
 ## Architecture
 
 The app is split into subdomains, each free to grow its own pages/db/tests: **core** (notes, family calendar — at the repo root) and **farm** (`farm/`). A subdomain only makes sense as a split when its tables never join across the boundary — farm's tables only ever join each other, never `notes`/`calendar_events`, which is what makes the split clean rather than arbitrary. New unrelated feature areas (e.g. a future finance or chores subdomain) should follow the same `<name>/{db.py,pages/}` shape rather than growing inside `pages/` or `db.py`.

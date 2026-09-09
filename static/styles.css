@@ -265,6 +265,7 @@ dialog#bed-dialog {
 
 .planting-dot.staged {
     stroke-dasharray: 1, 1;
+    cursor: pointer;
 }
 
 .planting-dot.companion {

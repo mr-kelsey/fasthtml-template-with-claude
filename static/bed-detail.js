@@ -215,6 +215,12 @@
             state.staged_points.forEach(function (point) {
                 var dot = make_circle(point.x_in, point.y_in, 2, "planting-dot staged", state.armed_variety.color_hex);
                 dot.setAttribute("data-common-name", state.armed_variety.common_name);
+                // The staged dot sits on top of (and, once staged, always outranks -- see is_blocked)
+                // its own lattice point, so unstaging has to be wired here rather than on the lattice
+                // circle underneath.
+                dot.addEventListener("click", function () {
+                    toggle_point(point);
+                });
                 staged_layer.appendChild(dot);
             });
         }
