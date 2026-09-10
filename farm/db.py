@@ -33,8 +33,6 @@ SCHEMA_STATEMENTS = [
         quantity INTEGER,
         quantity_germinated INTEGER,
         notes TEXT,
-        cell_x INTEGER,
-        cell_y INTEGER,
         created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
     )
     """,
@@ -62,10 +60,6 @@ SCHEMA_STATEMENTS = [
     ("plantings", "seed_lot_id", "INTEGER"),
     ("plantings", "x_in", "REAL"),
     ("plantings", "y_in", "REAL"),
-    """
-    UPDATE plantings SET x_in = cell_x * 12, y_in = cell_y * 12
-    WHERE x_in IS NULL AND cell_x IS NOT NULL
-    """,
     """
     CREATE TABLE IF NOT EXISTS companion_rules (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -95,8 +89,6 @@ SCHEMA_STATEMENTS = [
         width_ft INTEGER NOT NULL,
         length_ft INTEGER NOT NULL,
         rotation_deg INTEGER NOT NULL DEFAULT 0,
-        sun_exposure TEXT,
-        irrigation_zone TEXT,
         created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
     )
     """,
@@ -205,7 +197,7 @@ _SEED_VARIETY_COLUMNS = (
 
 _PLANTING_COLUMNS = (
     "id, variety_id, bed_id, location, planted_date, quantity, quantity_germinated, quantity_culled, notes, "
-    "cell_x, cell_y, x_in, y_in, seed_lot_id, transplant_lot_id, source_type, soil_temp_f, created_at"
+    "x_in, y_in, seed_lot_id, transplant_lot_id, source_type, soil_temp_f, created_at"
 )
 
 _HARVEST_COLUMNS = "id, planting_id, harvest_date, weight_lb, notes, created_at"
@@ -676,7 +668,7 @@ class FarmDatabaseMixin:
             return db_connection.execute(
                 text(
                     "SELECT p.id, p.variety_id, p.bed_id, p.location, p.planted_date, p.quantity, "
-                    "p.quantity_germinated, p.notes, p.cell_x, p.cell_y, p.x_in, p.y_in, p.seed_lot_id, "
+                    "p.quantity_germinated, p.notes, p.x_in, p.y_in, p.seed_lot_id, "
                     "p.transplant_lot_id, p.source_type, p.created_at, "
                     "sv.name AS variety_name, sv.common_name, "
                     "sv.germination_days_min, sv.germination_days_max, "
@@ -693,7 +685,7 @@ class FarmDatabaseMixin:
             return db_connection.execute(
                 text(
                     "SELECT p.id, p.variety_id, p.bed_id, p.location, p.planted_date, p.quantity, "
-                    "p.quantity_germinated, p.notes, p.cell_x, p.cell_y, p.x_in, p.y_in, p.seed_lot_id, "
+                    "p.quantity_germinated, p.notes, p.x_in, p.y_in, p.seed_lot_id, "
                     "p.transplant_lot_id, p.source_type, p.soil_temp_f, p.created_at, "
                     "sv.name AS variety_name, sv.common_name, sv.color_hex, sv.spacing_in, "
                     "sv.germination_days_min, sv.germination_days_max, "

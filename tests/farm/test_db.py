@@ -1,7 +1,5 @@
 from datetime import date, timedelta
 
-from sqlalchemy import text
-
 import db
 
 ALL_TIME = ("2000-01-01", "2100-01-01")
@@ -876,22 +874,6 @@ def test_list_plantings_for_bed_includes_inch_position():
     variety_id = _add_variety()
     bed_id = _add_bed()
     db.add_planting(variety_id, "2026-05-01", bed_id=bed_id, x_in=24, y_in=36)
-    planting = db.list_plantings_for_bed(bed_id)[0]
-    assert (planting["x_in"], planting["y_in"]) == (24, 36)
-
-
-def test_init_db_backfills_x_in_y_in_from_legacy_cell_columns():
-    variety_id = _add_variety()
-    bed_id = _add_bed()
-    with db.engine.begin() as db_connection:
-        db_connection.execute(
-            text(
-                "INSERT INTO plantings (variety_id, bed_id, planted_date, cell_x, cell_y) "
-                "VALUES (:variety_id, :bed_id, '2026-05-01', 2, 3)"
-            ),
-            {"variety_id": variety_id, "bed_id": bed_id},
-        )
-    db.init_db()
     planting = db.list_plantings_for_bed(bed_id)[0]
     assert (planting["x_in"], planting["y_in"]) == (24, 36)
 
