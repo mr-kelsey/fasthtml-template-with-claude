@@ -80,6 +80,16 @@ def parse_required_int(value: str, field_label: str):
         return None, f"{field_label} must be a number."
 
 
+def parse_required_float(value: str, field_label: str):
+    "Returns (float, None) or (None, error_message) if value is blank or not a valid number."
+    if value is None or value.strip() == "":
+        return None, f"{field_label} is required."
+    try:
+        return float(value), None
+    except ValueError:
+        return None, f"{field_label} must be a number."
+
+
 def parse_agronomic_fields(
     germination_days_min: str,
     germination_days_max: str,

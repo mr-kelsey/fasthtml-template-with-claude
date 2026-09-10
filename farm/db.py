@@ -156,6 +156,17 @@ SCHEMA_STATEMENTS = [
     )
     """,
     ("farm_events", "linked_product_application_id", "INTEGER"),
+    ("plantings", "quantity_culled", "INTEGER"),
+    """
+    CREATE TABLE IF NOT EXISTS harvests (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        planting_id INTEGER NOT NULL,
+        harvest_date TEXT NOT NULL,
+        weight_lb REAL NOT NULL,
+        notes TEXT,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
+    """,
 ]
 
 _AGRONOMIC_COLUMNS = (
@@ -174,9 +185,11 @@ _SEED_VARIETY_COLUMNS = (
 )
 
 _PLANTING_COLUMNS = (
-    "id, variety_id, bed_id, location, planted_date, quantity, quantity_germinated, notes, "
+    "id, variety_id, bed_id, location, planted_date, quantity, quantity_germinated, quantity_culled, notes, "
     "cell_x, cell_y, x_in, y_in, seed_lot_id, transplant_lot_id, source_type, soil_temp_f, created_at"
 )
+
+_HARVEST_COLUMNS = "id, planting_id, harvest_date, weight_lb, notes, created_at"
 
 _SEED_LOT_COLUMNS = "id, variety_id, quantity_on_hand, acquired_date, seed_source, notes, created_at"
 
@@ -682,13 +695,14 @@ class FarmDatabaseMixin:
     @staticmethod
     def _normalize_planting_fields(
         bed_id, location, quantity, quantity_germinated, notes, x_in=None, y_in=None, seed_lot_id=None,
-        transplant_lot_id=None, source_type="seed", soil_temp_f=None,
+        transplant_lot_id=None, source_type="seed", soil_temp_f=None, quantity_culled=None,
     ):
         return {
             "bed_id": bed_id,
             "location": location or None,
             "quantity": quantity,
             "quantity_germinated": quantity_germinated,
+            "quantity_culled": quantity_culled,
             "notes": notes or None,
             "x_in": x_in,
             "y_in": y_in,
@@ -713,21 +727,22 @@ class FarmDatabaseMixin:
         transplant_lot_id: int = None,
         source_type: str = "seed",
         soil_temp_f: float = None,
+        quantity_culled: int = None,
     ):
         "Returns the new planting's id. Regenerates the (variety, planted_date) group's linked farm_events."
         fields = self._normalize_planting_fields(
             bed_id, location, quantity, quantity_germinated, notes, x_in, y_in, seed_lot_id,
-            transplant_lot_id, source_type, soil_temp_f,
+            transplant_lot_id, source_type, soil_temp_f, quantity_culled,
         )
         with self.engine.begin() as db_connection:
             result = db_connection.execute(
                 text(
                     "INSERT INTO plantings (variety_id, bed_id, location, planted_date, quantity, "
-                    "quantity_germinated, notes, x_in, y_in, seed_lot_id, transplant_lot_id, source_type, "
-                    "soil_temp_f) "
+                    "quantity_germinated, quantity_culled, notes, x_in, y_in, seed_lot_id, transplant_lot_id, "
+                    "source_type, soil_temp_f) "
                     "VALUES (:variety_id, :bed_id, :location, :planted_date, :quantity, "
-                    ":quantity_germinated, :notes, :x_in, :y_in, :seed_lot_id, :transplant_lot_id, :source_type, "
-                    ":soil_temp_f)"
+                    ":quantity_germinated, :quantity_culled, :notes, :x_in, :y_in, :seed_lot_id, "
+                    ":transplant_lot_id, :source_type, :soil_temp_f)"
                 ),
                 {"variety_id": variety_id, "planted_date": planted_date, **fields},
             )
@@ -795,10 +810,11 @@ class FarmDatabaseMixin:
         transplant_lot_id: int = None,
         source_type: str = "seed",
         soil_temp_f: float = None,
+        quantity_culled: int = None,
     ):
         fields = self._normalize_planting_fields(
             bed_id, location, quantity, quantity_germinated, notes, x_in, y_in, seed_lot_id,
-            transplant_lot_id, source_type, soil_temp_f,
+            transplant_lot_id, source_type, soil_temp_f, quantity_culled,
         )
         with self.engine.begin() as db_connection:
             old = db_connection.execute(
@@ -808,7 +824,7 @@ class FarmDatabaseMixin:
                 text(
                     "UPDATE plantings SET variety_id = :variety_id, planted_date = :planted_date, "
                     "bed_id = :bed_id, location = :location, quantity = :quantity, "
-                    "quantity_germinated = :quantity_germinated, notes = :notes, "
+                    "quantity_germinated = :quantity_germinated, quantity_culled = :quantity_culled, notes = :notes, "
                     "x_in = :x_in, y_in = :y_in, seed_lot_id = :seed_lot_id, "
                     "transplant_lot_id = :transplant_lot_id, source_type = :source_type, "
                     "soil_temp_f = :soil_temp_f WHERE id = :id"
@@ -819,6 +835,25 @@ class FarmDatabaseMixin:
             if old is not None and (old["variety_id"], old["planted_date"]) != (variety_id, planted_date):
                 self._regenerate_farm_events(db_connection, old["variety_id"], old["planted_date"])
 
+    def set_quantity_germinated(self, planting_id: int, quantity_germinated: int):
+        "Single-field update for the germination-check calendar form -- update_planting is a full-form replace."
+        with self.engine.begin() as db_connection:
+            db_connection.execute(
+                text("UPDATE plantings SET quantity_germinated = :quantity_germinated WHERE id = :id"),
+                {"id": planting_id, "quantity_germinated": quantity_germinated},
+            )
+
+    def list_plantings_in_group(self, variety_id: int, planted_date: str):
+        "Every planting sharing this (variety_id, planted_date) key -- the same group _regenerate_farm_events links one event to."
+        with self.engine.connect() as db_connection:
+            return db_connection.execute(
+                text(
+                    f"SELECT {_PLANTING_COLUMNS} FROM plantings "
+                    "WHERE variety_id = :variety_id AND planted_date = :planted_date ORDER BY id"
+                ),
+                {"variety_id": variety_id, "planted_date": planted_date},
+            ).mappings().all()
+
     def delete_planting(self, planting_id: int):
         with self.engine.begin() as db_connection:
             row = db_connection.execute(
@@ -828,6 +863,48 @@ class FarmDatabaseMixin:
             db_connection.execute(text("DELETE FROM plantings WHERE id = :id"), {"id": planting_id})
             if row is not None:
                 self._regenerate_farm_events(db_connection, row["variety_id"], row["planted_date"])
+
+    def add_harvest(self, planting_id: int, harvest_date: str, weight_lb: float, notes: str = None):
+        "Returns the new harvest's id. One planting can be harvested repeatedly -- this appends, never replaces."
+        with self.engine.begin() as db_connection:
+            result = db_connection.execute(
+                text(
+                    "INSERT INTO harvests (planting_id, harvest_date, weight_lb, notes) "
+                    "VALUES (:planting_id, :harvest_date, :weight_lb, :notes)"
+                ),
+                {"planting_id": planting_id, "harvest_date": harvest_date, "weight_lb": weight_lb, "notes": notes or None},
+            )
+            return result.lastrowid
+
+    def get_harvest(self, harvest_id: int):
+        with self.engine.connect() as db_connection:
+            return db_connection.execute(
+                text(f"SELECT {_HARVEST_COLUMNS} FROM harvests WHERE id = :id"), {"id": harvest_id}
+            ).mappings().first()
+
+    def list_harvests_for_planting(self, planting_id: int):
+        with self.engine.connect() as db_connection:
+            return db_connection.execute(
+                text(
+                    f"SELECT {_HARVEST_COLUMNS} FROM harvests WHERE planting_id = :planting_id "
+                    "ORDER BY harvest_date DESC, id DESC"
+                ),
+                {"planting_id": planting_id},
+            ).mappings().all()
+
+    def update_harvest(self, harvest_id: int, harvest_date: str, weight_lb: float, notes: str = None):
+        with self.engine.begin() as db_connection:
+            db_connection.execute(
+                text(
+                    "UPDATE harvests SET harvest_date = :harvest_date, weight_lb = :weight_lb, notes = :notes "
+                    "WHERE id = :id"
+                ),
+                {"id": harvest_id, "harvest_date": harvest_date, "weight_lb": weight_lb, "notes": notes or None},
+            )
+
+    def delete_harvest(self, harvest_id: int):
+        with self.engine.begin() as db_connection:
+            db_connection.execute(text("DELETE FROM harvests WHERE id = :id"), {"id": harvest_id})
 
     def _insert_farm_event_row(
         self, db_connection, event_type, title, start_date, end_date, linked_planting_id, notes=None,

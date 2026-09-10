@@ -5,7 +5,7 @@ from fasthtml import common as fast
 from fasthtml.svg import Svg, Rect, Circle, G, Defs, Pattern, Path
 
 from farm.layout import layout
-from farm.helpers import parse_optional_int, parse_optional_float, compute_window
+from farm.helpers import parse_optional_int, parse_optional_float, parse_required_float, compute_window
 import db
 
 router = fast.APIRouter()
@@ -90,6 +90,12 @@ def _planting_form(action, submit_label, varieties, planting=None):
             placeholder="Quantity germinated",
             value=_optional_value(planting, "quantity_germinated"),
         ),
+        fast.Input(
+            name="quantity_culled",
+            type="number",
+            placeholder="Quantity culled",
+            value=_optional_value(planting, "quantity_culled"),
+        ),
         fast.Textarea(
             planting["notes"] or "" if planting else "", name="notes", placeholder="Notes (optional)"
         ),
@@ -167,8 +173,8 @@ def _validate_variety_id(variety_id: str):
     return parsed_variety_id
 
 
-def _validate_planting_fields(variety_id, planted_date, quantity, quantity_germinated):
-    "Returns (variety_id, planted_date, quantity, quantity_germinated) or an error fast.Response."
+def _validate_planting_fields(variety_id, planted_date, quantity, quantity_germinated, quantity_culled):
+    "Returns (variety_id, planted_date, quantity, quantity_germinated, quantity_culled) or an error fast.Response."
     validated_variety_id = _validate_variety_id(variety_id)
     if isinstance(validated_variety_id, fast.Response):
         return validated_variety_id
@@ -181,7 +187,12 @@ def _validate_planting_fields(variety_id, planted_date, quantity, quantity_germi
     ok, quantity_germinated = parse_optional_int(quantity_germinated)
     if not ok:
         return fast.Response("Quantity germinated must be a number.", status_code=422)
-    return validated_variety_id, planted_date, quantity, quantity_germinated
+    ok, quantity_culled = parse_optional_int(quantity_culled)
+    if not ok:
+        return fast.Response("Quantity culled must be a number.", status_code=422)
+    if quantity_culled is not None and (quantity_germinated is None or quantity_culled > quantity_germinated):
+        return fast.Response("Quantity culled cannot exceed quantity germinated.", status_code=422)
+    return validated_variety_id, planted_date, quantity, quantity_germinated, quantity_culled
 
 
 @router("/plantings", methods=["post"])
@@ -191,21 +202,60 @@ def add_planting_route(
     location: str = "",
     quantity: str = "",
     quantity_germinated: str = "",
+    quantity_culled: str = "",
     notes: str = "",
 ):
-    validated = _validate_planting_fields(variety_id, planted_date, quantity, quantity_germinated)
+    validated = _validate_planting_fields(variety_id, planted_date, quantity, quantity_germinated, quantity_culled)
     if isinstance(validated, fast.Response):
         return validated
-    variety_id, planted_date, quantity, quantity_germinated = validated
+    variety_id, planted_date, quantity, quantity_germinated, quantity_culled = validated
     db.add_planting(
         variety_id,
         planted_date,
         location=location.strip() or None,
         quantity=quantity,
         quantity_germinated=quantity_germinated,
+        quantity_culled=quantity_culled,
         notes=notes.strip() or None,
     )
     return fast.Redirect("/plantings")
+
+
+def _yield_summary(planting, harvests):
+    "Living plants, total harvested, and computed (not stored) yield-per-plant, alongside the harvest log."
+    living = None
+    if planting["quantity_germinated"] is not None:
+        living = planting["quantity_germinated"] - (planting["quantity_culled"] or 0)
+    total_weight = sum(h["weight_lb"] for h in harvests)
+    yield_per_plant = total_weight / living if living else None
+    harvest_rows = [
+        fast.Li(
+            f"{h['harvest_date']}: {h['weight_lb']} lb" + (f" — {h['notes']}" if h["notes"] else ""),
+            " ",
+            fast.A("Edit", href=f"/harvests/{h['id']}/edit"),
+            fast.Form(
+                fast.Button("Delete", type="submit"), method="post", action=f"/harvests/{h['id']}/delete"
+            ),
+        )
+        for h in harvests
+    ]
+    return fast.Div(
+        fast.H2("Yield"),
+        fast.P(f"Living plants: {living if living is not None else 'unknown'}"),
+        fast.P(f"Total harvested: {total_weight} lb") if harvests else fast.P("No harvests logged yet."),
+        fast.P(f"Yield per plant: {yield_per_plant:.2f} lb/plant") if yield_per_plant is not None else "",
+        fast.H3("Harvest history") if harvests else "",
+        fast.Ul(*harvest_rows) if harvests else "",
+        fast.H3("Log a harvest"),
+        fast.Form(
+            fast.Input(name="harvest_date", type="date", required=True),
+            fast.Input(name="weight_lb", type="number", step="0.01", placeholder="Weight (lb)", required=True),
+            fast.Textarea("", name="notes", placeholder="Notes (optional)"),
+            fast.Button("Log Harvest", type="submit"),
+            method="post",
+            action=f"/plantings/{planting['id']}/harvests",
+        ),
+    )
 
 
 @router("/plantings/{planting_id}/edit", methods=["get"])
@@ -222,6 +272,7 @@ def edit_planting_page(planting_id: int):
             varieties=db.list_seed_varieties(),
             planting=planting,
         ),
+        _yield_summary(planting, db.list_harvests_for_planting(planting_id)),
     )
 
 
@@ -233,15 +284,16 @@ def update_planting_route(
     location: str = "",
     quantity: str = "",
     quantity_germinated: str = "",
+    quantity_culled: str = "",
     notes: str = "",
 ):
     existing = db.get_planting(planting_id)
     if existing is None:
         return fast.Response("Planting not found.", status_code=404)
-    validated = _validate_planting_fields(variety_id, planted_date, quantity, quantity_germinated)
+    validated = _validate_planting_fields(variety_id, planted_date, quantity, quantity_germinated, quantity_culled)
     if isinstance(validated, fast.Response):
         return validated
-    variety_id, planted_date, quantity, quantity_germinated = validated
+    variety_id, planted_date, quantity, quantity_germinated, quantity_culled = validated
     db.update_planting(
         planting_id,
         variety_id,
@@ -250,6 +302,7 @@ def update_planting_route(
         location=location.strip() or None,
         quantity=quantity,
         quantity_germinated=quantity_germinated,
+        quantity_culled=quantity_culled,
         notes=notes.strip() or None,
         x_in=existing["x_in"],
         y_in=existing["y_in"],
@@ -261,6 +314,75 @@ def update_planting_route(
     if existing["bed_id"] is not None:
         return fast.Redirect(f"/beds/{existing['bed_id']}")
     return fast.Redirect("/plantings")
+
+
+def _validate_harvest_fields(harvest_date, weight_lb):
+    "Returns (harvest_date, weight_lb) or an error fast.Response."
+    harvest_date = harvest_date.strip()
+    if not harvest_date or _parse_date_or_none(harvest_date) is None:
+        return fast.Response("Invalid harvest date.", status_code=422)
+    weight_lb, error = parse_required_float(weight_lb, "Weight")
+    if error:
+        return fast.Response(error, status_code=422)
+    return harvest_date, weight_lb
+
+
+@router("/plantings/{planting_id}/harvests", methods=["post"])
+def add_harvest_route(planting_id: int, harvest_date: str, weight_lb: str, notes: str = ""):
+    planting = db.get_planting(planting_id)
+    if planting is None:
+        return fast.Response("Planting not found.", status_code=404)
+    validated = _validate_harvest_fields(harvest_date, weight_lb)
+    if isinstance(validated, fast.Response):
+        return validated
+    harvest_date, weight_lb = validated
+    db.add_harvest(planting_id, harvest_date, weight_lb, notes=notes.strip() or None)
+    return fast.Redirect(f"/plantings/{planting_id}/edit")
+
+
+def _harvest_form(action, harvest):
+    return fast.Form(
+        fast.Input(name="harvest_date", type="date", value=harvest["harvest_date"], required=True),
+        fast.Input(name="weight_lb", type="number", step="0.01", value=harvest["weight_lb"], required=True),
+        fast.Textarea(harvest["notes"] or "", name="notes", placeholder="Notes (optional)"),
+        fast.Button("Save Changes", type="submit"),
+        method="post",
+        action=action,
+    )
+
+
+@router("/harvests/{harvest_id}/edit", methods=["get"])
+def edit_harvest_page(harvest_id: int):
+    harvest = db.get_harvest(harvest_id)
+    if harvest is None:
+        return fast.Response("Harvest not found.", status_code=404)
+    return layout(
+        "Edit Harvest",
+        fast.H1("Edit Harvest"),
+        _harvest_form(action=f"/harvests/{harvest_id}/edit", harvest=harvest),
+    )
+
+
+@router("/harvests/{harvest_id}/edit", methods=["post"])
+def update_harvest_route(harvest_id: int, harvest_date: str, weight_lb: str, notes: str = ""):
+    harvest = db.get_harvest(harvest_id)
+    if harvest is None:
+        return fast.Response("Harvest not found.", status_code=404)
+    validated = _validate_harvest_fields(harvest_date, weight_lb)
+    if isinstance(validated, fast.Response):
+        return validated
+    harvest_date, weight_lb = validated
+    db.update_harvest(harvest_id, harvest_date, weight_lb, notes=notes.strip() or None)
+    return fast.Redirect(f"/plantings/{harvest['planting_id']}/edit")
+
+
+@router("/harvests/{harvest_id}/delete", methods=["post"])
+def delete_harvest_route(harvest_id: int):
+    harvest = db.get_harvest(harvest_id)
+    if harvest is None:
+        return fast.Redirect("/plantings")
+    db.delete_harvest(harvest_id)
+    return fast.Redirect(f"/plantings/{harvest['planting_id']}/edit")
 
 
 @router("/plantings/{planting_id}/delete", methods=["post"])

@@ -1293,3 +1293,111 @@ def test_list_beds_includes_plot_name_from_join():
     plot_id = _add_plot(name="Back Field")
     _add_bed(plot_id=plot_id, label="Bed 1")
     assert db.list_beds()[0]["plot_name"] == "Back Field"
+
+
+def test_update_planting_persists_quantity_culled():
+    variety_id = _add_variety()
+    planting_id = db.add_planting(variety_id, "2026-05-01", quantity_germinated=10)
+    db.update_planting(planting_id, variety_id, "2026-05-01", quantity_germinated=10, quantity_culled=4)
+    assert db.get_planting(planting_id)["quantity_culled"] == 4
+
+
+def test_add_planting_defaults_quantity_culled_to_none():
+    variety_id = _add_variety()
+    planting_id = db.add_planting(variety_id, "2026-05-01")
+    assert db.get_planting(planting_id)["quantity_culled"] is None
+
+
+def test_set_quantity_germinated_updates_only_target_planting():
+    variety_id = _add_variety()
+    planting_id = db.add_planting(variety_id, "2026-05-01")
+    other_id = db.add_planting(variety_id, "2026-05-01")
+    db.set_quantity_germinated(planting_id, 8)
+    assert (db.get_planting(planting_id)["quantity_germinated"], db.get_planting(other_id)["quantity_germinated"]) == (8, None)
+
+
+def test_set_quantity_germinated_does_not_regenerate_farm_events():
+    variety_id = _add_variety(germination_days_min=5, germination_days_max=10)
+    planting_id = db.add_planting(variety_id, "2026-05-01")
+    event_id_before = db.list_farm_events_in_range(*ALL_TIME)[0]["id"]
+    db.set_quantity_germinated(planting_id, 8)
+    events_after = db.list_farm_events_in_range(*ALL_TIME)
+    assert (len(events_after), events_after[0]["id"]) == (1, event_id_before)
+
+
+def test_list_plantings_in_group_returns_all_plantings_sharing_variety_and_date():
+    variety_id = _add_variety()
+    first_id = db.add_planting(variety_id, "2026-05-01")
+    second_id = db.add_planting(variety_id, "2026-05-01")
+    assert sorted(p["id"] for p in db.list_plantings_in_group(variety_id, "2026-05-01")) == sorted([first_id, second_id])
+
+
+def test_list_plantings_in_group_excludes_different_planted_date():
+    variety_id = _add_variety()
+    db.add_planting(variety_id, "2026-05-01")
+    db.add_planting(variety_id, "2026-06-01")
+    assert len(db.list_plantings_in_group(variety_id, "2026-05-01")) == 1
+
+
+def _add_planting_for_harvest(**kwargs):
+    variety_id = _add_variety()
+    return db.add_planting(variety_id, "2026-05-01", **kwargs)
+
+
+def test_add_harvest_persists_weight_and_date():
+    planting_id = _add_planting_for_harvest()
+    db.add_harvest(planting_id, "2026-08-01", 3.5)
+    harvest = db.list_harvests_for_planting(planting_id)[0]
+    assert (harvest["harvest_date"], harvest["weight_lb"]) == ("2026-08-01", 3.5)
+
+
+def test_add_harvest_persists_notes():
+    planting_id = _add_planting_for_harvest()
+    db.add_harvest(planting_id, "2026-08-01", 3.5, notes="First picking")
+    assert db.list_harvests_for_planting(planting_id)[0]["notes"] == "First picking"
+
+
+def test_list_harvests_for_planting_orders_by_date_descending():
+    planting_id = _add_planting_for_harvest()
+    db.add_harvest(planting_id, "2026-08-01", 1.0)
+    db.add_harvest(planting_id, "2026-08-15", 2.0)
+    assert [h["harvest_date"] for h in db.list_harvests_for_planting(planting_id)] == ["2026-08-15", "2026-08-01"]
+
+
+def test_list_harvests_for_planting_excludes_other_plantings():
+    planting_id = _add_planting_for_harvest()
+    other_id = _add_planting_for_harvest()
+    db.add_harvest(other_id, "2026-08-01", 1.0)
+    assert db.list_harvests_for_planting(planting_id) == []
+
+
+def test_get_harvest_returns_matching_row():
+    planting_id = _add_planting_for_harvest()
+    db.add_harvest(planting_id, "2026-08-01", 3.5)
+    harvest_id = db.list_harvests_for_planting(planting_id)[0]["id"]
+    assert db.get_harvest(harvest_id)["weight_lb"] == 3.5
+
+
+def test_get_harvest_returns_none_when_not_found():
+    assert db.get_harvest(999999) is None
+
+
+def test_update_harvest_persists_changes():
+    planting_id = _add_planting_for_harvest()
+    db.add_harvest(planting_id, "2026-08-01", 3.5)
+    harvest_id = db.list_harvests_for_planting(planting_id)[0]["id"]
+    db.update_harvest(harvest_id, "2026-08-02", 4.5, notes="Corrected")
+    harvest = db.get_harvest(harvest_id)
+    assert (harvest["harvest_date"], harvest["weight_lb"], harvest["notes"]) == ("2026-08-02", 4.5, "Corrected")
+
+
+def test_delete_harvest_removes_row():
+    planting_id = _add_planting_for_harvest()
+    db.add_harvest(planting_id, "2026-08-01", 3.5)
+    harvest_id = db.list_harvests_for_planting(planting_id)[0]["id"]
+    db.delete_harvest(harvest_id)
+    assert db.list_harvests_for_planting(planting_id) == []
+
+
+def test_delete_nonexistent_harvest_is_a_noop():
+    db.delete_harvest(999999)

@@ -532,6 +532,81 @@ def test_delete_planting_removes_it(client):
     assert db.list_plantings() == []
 
 
+def test_update_planting_rejects_quantity_culled_exceeding_germinated(client):
+    variety_id = _create_variety(client)
+    client.post(
+        "/plantings", data={"variety_id": str(variety_id), "planted_date": "2026-05-01", "quantity_germinated": "5"}
+    )
+    planting_id = db.list_plantings()[0]["id"]
+    response = client.post(
+        f"/plantings/{planting_id}/edit",
+        data={
+            "variety_id": str(variety_id), "planted_date": "2026-05-01",
+            "quantity_germinated": "5", "quantity_culled": "9",
+        },
+    )
+    assert response.status_code == 422
+
+
+def test_edit_planting_page_shows_no_yield_when_no_harvests_logged(client):
+    variety_id = _create_variety(client)
+    client.post("/plantings", data={"variety_id": str(variety_id), "planted_date": "2026-05-01"})
+    planting_id = db.list_plantings()[0]["id"]
+    response = client.get(f"/plantings/{planting_id}/edit")
+    assert "No harvests logged yet." in response.text
+
+
+def test_post_planting_harvest_route_adds_row(client):
+    variety_id = _create_variety(client)
+    client.post("/plantings", data={"variety_id": str(variety_id), "planted_date": "2026-05-01"})
+    planting_id = db.list_plantings()[0]["id"]
+    client.post(f"/plantings/{planting_id}/harvests", data={"harvest_date": "2026-08-01", "weight_lb": "3.5"})
+    assert len(db.list_harvests_for_planting(planting_id)) == 1
+
+
+def test_edit_planting_page_shows_yield_per_plant(client):
+    variety_id = _create_variety(client)
+    client.post(
+        "/plantings", data={"variety_id": str(variety_id), "planted_date": "2026-05-01", "quantity_germinated": "10"}
+    )
+    planting_id = db.list_plantings()[0]["id"]
+    client.post(
+        f"/plantings/{planting_id}/edit",
+        data={
+            "variety_id": str(variety_id), "planted_date": "2026-05-01",
+            "quantity_germinated": "10", "quantity_culled": "4",
+        },
+    )
+    client.post(f"/plantings/{planting_id}/harvests", data={"harvest_date": "2026-08-01", "weight_lb": "6"})
+    response = client.get(f"/plantings/{planting_id}/edit")
+    assert "1.00 lb/plant" in response.text
+
+
+def test_harvest_edit_page_returns_404_when_not_found(client):
+    response = client.get("/harvests/999999/edit")
+    assert response.status_code == 404
+
+
+def test_harvest_edit_route_updates_row(client):
+    variety_id = _create_variety(client)
+    client.post("/plantings", data={"variety_id": str(variety_id), "planted_date": "2026-05-01"})
+    planting_id = db.list_plantings()[0]["id"]
+    client.post(f"/plantings/{planting_id}/harvests", data={"harvest_date": "2026-08-01", "weight_lb": "3.5"})
+    harvest_id = db.list_harvests_for_planting(planting_id)[0]["id"]
+    client.post(f"/harvests/{harvest_id}/edit", data={"harvest_date": "2026-08-02", "weight_lb": "4.5"})
+    assert db.get_harvest(harvest_id)["weight_lb"] == 4.5
+
+
+def test_harvest_delete_route_removes_row(client):
+    variety_id = _create_variety(client)
+    client.post("/plantings", data={"variety_id": str(variety_id), "planted_date": "2026-05-01"})
+    planting_id = db.list_plantings()[0]["id"]
+    client.post(f"/plantings/{planting_id}/harvests", data={"harvest_date": "2026-08-01", "weight_lb": "3.5"})
+    harvest_id = db.list_harvests_for_planting(planting_id)[0]["id"]
+    client.post(f"/harvests/{harvest_id}/delete")
+    assert db.list_harvests_for_planting(planting_id) == []
+
+
 def test_overlapping_plantings_at_same_location_show_warning(client):
     variety_id = _create_variety(client, days_to_maturity_min="60", days_to_maturity_max="70")
     client.post(
@@ -1221,6 +1296,82 @@ def test_delete_linked_farm_event_does_not_remove_it(client):
 def test_add_custom_farm_event_rejects_blank_title(client):
     response = client.post("/farm-calendar", data={"title": "", "event_type": "custom", "start_date": "2026-09-10"})
     assert response.status_code == 422
+
+
+def test_farm_calendar_day_fragment_shows_record_link_for_germination_check_event(client):
+    variety_id = _create_variety(client, germination_days_min="5", germination_days_max="10")
+    client.post("/plantings", data={"variety_id": str(variety_id), "planted_date": "2026-05-01"})
+    event = db.list_farm_events_in_range("2000-01-01", "2100-01-01")[0]
+    response = client.get(f"/farm-calendar/day/{event['start_date']}")
+    assert "Record" in response.text
+
+
+def test_farm_calendar_day_fragment_shows_record_link_for_harvest_event(client):
+    variety_id = _create_variety(client, days_to_maturity_min="60", days_to_maturity_max="70")
+    client.post("/plantings", data={"variety_id": str(variety_id), "planted_date": "2026-05-01"})
+    event = db.list_farm_events_in_range("2000-01-01", "2100-01-01")[0]
+    response = client.get(f"/farm-calendar/day/{event['start_date']}")
+    assert "Record" in response.text
+
+
+def test_farm_calendar_day_fragment_shows_no_record_link_for_custom_event(client):
+    client.post("/farm-calendar", data={"title": "Check frost cloth", "event_type": "custom", "start_date": "2026-09-10"})
+    response = client.get("/farm-calendar/day/2026-09-10")
+    assert "Record" not in response.text
+
+
+def test_record_route_404s_for_custom_event_type(client):
+    client.post("/farm-calendar", data={"title": "Check frost cloth", "event_type": "custom", "start_date": "2026-09-10"})
+    event_id = db.list_farm_events_in_range("2000-01-01", "2100-01-01")[0]["id"]
+    response = client.get(f"/farm-calendar/{event_id}/record")
+    assert response.status_code == 404
+
+
+def test_record_germination_page_lists_every_planting_in_group(client):
+    variety_id = _create_variety(client, germination_days_min="5", germination_days_max="10")
+    client.post("/plantings", data={"variety_id": str(variety_id), "planted_date": "2026-05-01", "location": "Row A"})
+    client.post("/plantings", data={"variety_id": str(variety_id), "planted_date": "2026-05-01", "location": "Row B"})
+    event = db.list_farm_events_in_range("2000-01-01", "2100-01-01")[0]
+    response = client.get(f"/farm-calendar/{event['id']}/record")
+    assert "Row A" in response.text and "Row B" in response.text
+
+
+def test_post_record_germination_updates_target_planting_quantity(client):
+    variety_id = _create_variety(client, germination_days_min="5", germination_days_max="10")
+    client.post("/plantings", data={"variety_id": str(variety_id), "planted_date": "2026-05-01"})
+    planting_id = db.list_plantings()[0]["id"]
+    event_id = db.list_farm_events_in_range("2000-01-01", "2100-01-01")[0]["id"]
+    client.post(f"/farm-calendar/{event_id}/record/germination/{planting_id}", data={"quantity_germinated": "8"})
+    assert db.get_planting(planting_id)["quantity_germinated"] == 8
+
+
+def test_post_record_germination_leaves_calendar_event_count_unchanged(client):
+    variety_id = _create_variety(client, germination_days_min="5", germination_days_max="10")
+    client.post("/plantings", data={"variety_id": str(variety_id), "planted_date": "2026-05-01"})
+    planting_id = db.list_plantings()[0]["id"]
+    event_id = db.list_farm_events_in_range("2000-01-01", "2100-01-01")[0]["id"]
+    client.post(f"/farm-calendar/{event_id}/record/germination/{planting_id}", data={"quantity_germinated": "8"})
+    assert len(db.list_farm_events_in_range("2000-01-01", "2100-01-01")) == 1
+
+
+def test_record_harvest_page_shows_existing_harvest_history(client):
+    variety_id = _create_variety(client, days_to_maturity_min="60", days_to_maturity_max="70")
+    client.post("/plantings", data={"variety_id": str(variety_id), "planted_date": "2026-05-01"})
+    planting_id = db.list_plantings()[0]["id"]
+    db.add_harvest(planting_id, "2026-08-01", 3.5)
+    event = db.list_farm_events_in_range("2000-01-01", "2100-01-01")[0]
+    response = client.get(f"/farm-calendar/{event['id']}/record")
+    assert "3.5 lb" in response.text
+
+
+def test_post_record_harvest_route_appends_new_row_on_repeat_submit(client):
+    variety_id = _create_variety(client, days_to_maturity_min="60", days_to_maturity_max="70")
+    client.post("/plantings", data={"variety_id": str(variety_id), "planted_date": "2026-05-01"})
+    planting_id = db.list_plantings()[0]["id"]
+    event_id = db.list_farm_events_in_range("2000-01-01", "2100-01-01")[0]["id"]
+    client.post(f"/farm-calendar/{event_id}/record/harvest", data={"harvest_date": "2026-08-01", "weight_lb": "2.0"})
+    client.post(f"/farm-calendar/{event_id}/record/harvest", data={"harvest_date": "2026-08-15", "weight_lb": "3.0"})
+    assert len(db.list_harvests_for_planting(planting_id)) == 2
 
 
 def _create_garden_product(client, name="Fish Emulsion", **fields):
