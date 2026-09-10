@@ -703,7 +703,12 @@ def _load_shade_polygons(plot_id):
     "shade_polygons_for_plot's rows with points parsed into (x, y) tuples, ready for farm.geometry."
     rows = db.list_shade_polygons_for_plot(plot_id)
     return [
-        {"season": r["season"], "shade_type": r["shade_type"], "points": [tuple(p) for p in json.loads(r["points"])]}
+        {
+            "shade_source_id": r["shade_source_id"],
+            "season": r["season"],
+            "shade_type": r["shade_type"],
+            "points": [tuple(p) for p in json.loads(r["points"])],
+        }
         for r in rows
     ]
 

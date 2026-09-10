@@ -221,9 +221,7 @@ _COMPANION_RULE_COLUMNS = "id, plant_a_common_name, plant_b_common_name, relatio
 
 _LAND_PLOT_COLUMNS = "id, name, width_ft, length_ft, created_at"
 
-_BED_COLUMNS = (
-    "id, plot_id, label, x, y, width_ft, length_ft, rotation_deg, sun_exposure, irrigation_zone, created_at"
-)
+_BED_COLUMNS = "id, plot_id, label, x, y, width_ft, length_ft, rotation_deg, created_at"
 
 _GARDEN_PRODUCT_COLUMNS = (
     "id, name, product_type, npk_n, npk_p, npk_k, benefit_notes, application_frequency_days, created_at"
@@ -1083,50 +1081,28 @@ class FarmDatabaseMixin:
                 text(f"SELECT {_BED_COLUMNS} FROM beds WHERE id = :id"), {"id": bed_id}
             ).mappings().first()
 
-    def add_bed(
-        self,
-        plot_id: int,
-        label: str,
-        width_ft: int,
-        length_ft: int,
-        sun_exposure: str = None,
-        irrigation_zone: str = None,
-    ):
+    def add_bed(self, plot_id: int, label: str, width_ft: int, length_ft: int):
         "New beds start unplaced (x/y NULL) until dragged or 'added to map'."
         with self.engine.begin() as db_connection:
             db_connection.execute(
                 text(
-                    "INSERT INTO beds (plot_id, label, width_ft, length_ft, sun_exposure, irrigation_zone) "
-                    "VALUES (:plot_id, :label, :width_ft, :length_ft, :sun_exposure, :irrigation_zone)"
+                    "INSERT INTO beds (plot_id, label, width_ft, length_ft) "
+                    "VALUES (:plot_id, :label, :width_ft, :length_ft)"
                 ),
-                {
-                    "plot_id": plot_id, "label": label, "width_ft": width_ft, "length_ft": length_ft,
-                    "sun_exposure": sun_exposure or None, "irrigation_zone": irrigation_zone or None,
-                },
+                {"plot_id": plot_id, "label": label, "width_ft": width_ft, "length_ft": length_ft},
             )
 
-    def update_bed(
-        self,
-        bed_id: int,
-        label: str,
-        width_ft: int,
-        length_ft: int,
-        rotation_deg: int,
-        sun_exposure: str = None,
-        irrigation_zone: str = None,
-    ):
+    def update_bed(self, bed_id: int, label: str, width_ft: int, length_ft: int, rotation_deg: int):
         "Full edit of a bed's metadata/size/rotation -- does not touch position, see update_bed_position."
         with self.engine.begin() as db_connection:
             db_connection.execute(
                 text(
                     "UPDATE beds SET label = :label, width_ft = :width_ft, length_ft = :length_ft, "
-                    "rotation_deg = :rotation_deg, sun_exposure = :sun_exposure, irrigation_zone = :irrigation_zone "
-                    "WHERE id = :id"
+                    "rotation_deg = :rotation_deg WHERE id = :id"
                 ),
                 {
                     "id": bed_id, "label": label, "width_ft": width_ft, "length_ft": length_ft,
-                    "rotation_deg": rotation_deg, "sun_exposure": sun_exposure or None,
-                    "irrigation_zone": irrigation_zone or None,
+                    "rotation_deg": rotation_deg,
                 },
             )
 
@@ -1153,7 +1129,7 @@ class FarmDatabaseMixin:
             return db_connection.execute(
                 text(
                     "SELECT b.id, b.plot_id, b.label, b.x, b.y, b.width_ft, b.length_ft, b.rotation_deg, "
-                    "b.sun_exposure, b.irrigation_zone, b.created_at, lp.name AS plot_name "
+                    "b.created_at, lp.name AS plot_name "
                     "FROM beds b JOIN land_plots lp ON lp.id = b.plot_id "
                     "ORDER BY lp.name, b.label"
                 )

@@ -23,12 +23,6 @@ LABEL_CHAR_WIDTH_RATIO = 0.6  # rough average glyph width as a fraction of font-
 MIN_BED_DIM_FOR_LABEL = 1  # ft; below this no label fits legibly, so it's hidden
 
 
-def _optional_value(row, field):
-    if row is None or row[field] is None:
-        return ""
-    return row[field]
-
-
 def _plot_form(action, submit_label, plot=None):
     return fast.Form(
         fast.Input(name="name", placeholder="Name", value=plot["name"] if plot else "", required=True),
@@ -142,8 +136,6 @@ def _add_bed_form(plot_id):
         fast.Input(name="label", placeholder="Label (e.g. Bed 1)", required=True),
         fast.Input(name="width_ft", type="number", placeholder="Width (ft)", required=True),
         fast.Input(name="length_ft", type="number", placeholder="Length (ft)", required=True),
-        fast.Input(name="sun_exposure", placeholder="Sun exposure (optional)"),
-        fast.Input(name="irrigation_zone", placeholder="Irrigation zone (optional)"),
         fast.Button("Add Bed", type="submit"),
         method="post",
         action=f"/land-plots/{plot_id}/beds",
@@ -210,6 +202,34 @@ def _shade_combo_row(source, season, shade_type, polygon):
     )
 
 
+def _shade_type_group(source, shade_type, polygons_dict):
+    "Two seasons required per type -- both need drawing before the type reads as complete."
+    drawn_count = sum(
+        polygons_dict[_shade_combo_key(season, shade_type)] is not None for season in SEASON_OPTIONS
+    )
+    badge = "Complete" if drawn_count == len(SEASON_OPTIONS) else f"{drawn_count}/{len(SEASON_OPTIONS)} — needs both seasons"
+    return fast.Div(
+        fast.Button(
+            fast.Span(SHADE_TYPE_LABELS[shade_type]),
+            fast.Span(badge, cls="shade-type-badge"),
+            type="button",
+            cls="shade-type-toggle",
+            data_source_id=str(source["id"]),
+            data_shade_type=shade_type,
+        ),
+        fast.Div(
+            *[
+                _shade_combo_row(source, season, shade_type, polygons_dict[_shade_combo_key(season, shade_type)])
+                for season in SEASON_OPTIONS
+            ],
+            cls="shade-season-rows",
+            hidden=True,
+        ),
+        cls="shade-type-group",
+        data_shade_type=shade_type,
+    )
+
+
 def _shade_source_item(source, polygons_dict):
     return fast.Div(
         fast.Div(
@@ -221,10 +241,7 @@ def _shade_source_item(source, polygons_dict):
             ),
             cls="shade-source-header",
         ),
-        *[
-            _shade_combo_row(source, season, shade_type, polygons_dict[_shade_combo_key(season, shade_type)])
-            for season, shade_type in SHADE_COMBOS
-        ],
+        *[_shade_type_group(source, shade_type, polygons_dict) for shade_type in SHADE_TYPE_OPTIONS],
         cls="shade-source-item",
         data_source_id=str(source["id"]),
     )
@@ -351,14 +368,7 @@ def _validate_bed_dimensions(width_ft, length_ft):
 
 
 @router("/land-plots/{plot_id}/beds", methods=["post"])
-def add_bed_route(
-    plot_id: int,
-    label: str,
-    width_ft: str,
-    length_ft: str,
-    sun_exposure: str = "",
-    irrigation_zone: str = "",
-):
+def add_bed_route(plot_id: int, label: str, width_ft: str, length_ft: str):
     label = label.strip()
     if not label:
         return fast.Response("Label is required.", status_code=422)
@@ -366,10 +376,7 @@ def add_bed_route(
     if isinstance(validated, fast.Response):
         return validated
     width_ft, length_ft = validated
-    db.add_bed(
-        plot_id, label, width_ft, length_ft,
-        sun_exposure=sun_exposure.strip() or None, irrigation_zone=irrigation_zone.strip() or None,
-    )
+    db.add_bed(plot_id, label, width_ft, length_ft)
     return fast.Redirect(f"/land-plots/{plot_id}/map")
 
 
@@ -445,11 +452,6 @@ def _bed_edit_form(bed):
             name="rotation_deg", type="number", placeholder="Rotation (degrees)", value=bed["rotation_deg"],
             min="0", max="359",
         ),
-        fast.Input(name="sun_exposure", placeholder="Sun exposure (optional)", value=_optional_value(bed, "sun_exposure")),
-        fast.Input(
-            name="irrigation_zone", placeholder="Irrigation zone (optional)",
-            value=_optional_value(bed, "irrigation_zone"),
-        ),
         fast.Button("Save Changes", type="submit"),
         method="post",
         action=f"/beds/{bed['id']}/edit",
@@ -472,15 +474,7 @@ def bed_edit_fragment(bed_id: int):
 
 
 @router("/beds/{bed_id}/edit", methods=["post"])
-def update_bed_route(
-    bed_id: int,
-    label: str,
-    width_ft: str,
-    length_ft: str,
-    rotation_deg: str = "",
-    sun_exposure: str = "",
-    irrigation_zone: str = "",
-):
+def update_bed_route(bed_id: int, label: str, width_ft: str, length_ft: str, rotation_deg: str = ""):
     bed = db.get_bed(bed_id)
     if bed is None:
         return fast.Response("Bed not found.", status_code=404)
@@ -496,10 +490,7 @@ def update_bed_route(
         return fast.Response("Rotation must be a number.", status_code=422)
     if rotation_deg is not None and not (0 <= rotation_deg <= 359):
         return fast.Response("Rotation must be between 0 and 359 degrees.", status_code=422)
-    db.update_bed(
-        bed_id, label, width_ft, length_ft, rotation_deg or 0,
-        sun_exposure=sun_exposure.strip() or None, irrigation_zone=irrigation_zone.strip() or None,
-    )
+    db.update_bed(bed_id, label, width_ft, length_ft, rotation_deg or 0)
     return fast.Redirect(f"/beds/{bed_id}")
 
 
@@ -533,10 +524,10 @@ def delete_shade_source_route(source_id: int):
     return fast.Redirect(f"/land-plots/{source['plot_id']}/map")
 
 
-def _validate_polygon_points(raw_points):
-    """Returns (list of [x, y] float pairs, None) or (None, error_message). No bound-clamping
-    against the plot -- a shade source (e.g. a tree just past the fence line) can sit outside it
-    and still shade into it."""
+def _validate_polygon_points(raw_points, width_ft, length_ft):
+    """Returns (list of [x, y] float pairs, None) or (None, error_message). Points are clamped
+    to the plot's bounds -- nothing outside the land is worth classifying, so a shade shape is
+    capped at the plot edge rather than allowed to extend past it."""
     try:
         parsed = json.loads(raw_points)
     except (TypeError, ValueError):
@@ -549,7 +540,7 @@ def _validate_polygon_points(raw_points):
             x, y = float(item[0]), float(item[1])
         except (TypeError, ValueError, IndexError, KeyError):
             return None, "Invalid point payload."
-        points.append([x, y])
+        points.append([max(0.0, min(x, width_ft)), max(0.0, min(y, length_ft))])
     return points, None
 
 
@@ -559,11 +550,12 @@ def save_shade_polygon_route(source_id: int, season: str, shade_type: str, point
     source = db.get_shade_source(source_id)
     if source is None:
         return fast.Response("Shade source not found.", status_code=404)
+    plot = db.get_land_plot(source["plot_id"])
     if season not in SEASON_OPTIONS:
         return fast.Response("Invalid season.", status_code=422)
     if shade_type not in SHADE_TYPE_OPTIONS:
         return fast.Response("Invalid shade type.", status_code=422)
-    parsed_points, error = _validate_polygon_points(points)
+    parsed_points, error = _validate_polygon_points(points, plot["width_ft"], plot["length_ft"])
     if error:
         return fast.Response(error, status_code=422)
     polygon_id = db.save_shade_polygon(source_id, season, shade_type, json.dumps(parsed_points))

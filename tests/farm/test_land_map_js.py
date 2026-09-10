@@ -138,10 +138,32 @@ def _add_shade_source(plot_id, label="Oak tree"):
     return db.list_shade_sources_for_plot(plot_id)[0]["id"]
 
 
+def _type_toggle(page, source_id, shade_type="full"):
+    return page.locator(f'.shade-type-toggle[data-source-id="{source_id}"][data-shade-type="{shade_type}"]')
+
+
 def _draw_button(page, source_id, season="summer_solstice", shade_type="full"):
     return page.locator(
         f'.shade-draw-button[data-source-id="{source_id}"][data-season="{season}"][data-shade-type="{shade_type}"]'
     )
+
+
+def _expand_shade_type(page, source_id, shade_type="full"):
+    "The season rows (draw/delete buttons) start collapsed under their Full/Partial type toggle."
+    _type_toggle(page, source_id, shade_type).click()
+
+
+def test_shade_sidebar_shows_two_type_toggles_not_four_combo_buttons(page, live_server_url):
+    plot_id = _make_plot(width_ft=20, length_ft=20)
+    source_id = _add_shade_source(plot_id)
+    page.goto(f"{live_server_url}/land-plots/{plot_id}/map")
+
+    item = page.locator(f'.shade-source-item[data-source-id="{source_id}"]')
+    assert item.locator(".shade-type-toggle").count() == 2
+    assert item.locator(".shade-draw-button").count() == 4
+    assert not _draw_button(page, source_id).is_visible()
+    _expand_shade_type(page, source_id, "full")
+    assert _draw_button(page, source_id).is_visible()
 
 
 def test_drawing_a_shade_polygon_persists_its_points(page, live_server_url):
@@ -149,6 +171,7 @@ def test_drawing_a_shade_polygon_persists_its_points(page, live_server_url):
     source_id = _add_shade_source(plot_id)
     page.goto(f"{live_server_url}/land-plots/{plot_id}/map")
 
+    _expand_shade_type(page, source_id)
     _draw_button(page, source_id).click()
     page.mouse.click(*_svg_click_point(page, 20, 20, 2, 2))
     page.mouse.click(*_svg_click_point(page, 20, 20, 6, 2))
@@ -159,12 +182,37 @@ def test_drawing_a_shade_polygon_persists_its_points(page, live_server_url):
     assert len(db.list_shade_polygons_for_source(source_id)) == 1
 
 
+def test_dragging_a_polygon_vertex_past_the_plot_edge_clamps_to_the_boundary(page, live_server_url):
+    plot_id = _make_plot(width_ft=10, length_ft=10)
+    source_id = _add_shade_source(plot_id)
+    db.save_shade_polygon(source_id, "summer_solstice", "full", json.dumps([[2, 2], [6, 2], [6, 6]]))
+    page.goto(f"{live_server_url}/land-plots/{plot_id}/map")
+
+    _expand_shade_type(page, source_id)
+    _draw_button(page, source_id).click()  # already drawn -- enters editing mode with draggable vertices
+
+    # Drag the first vertex from (2, 2) far past the 10x10 plot's edge -- pointer capture keeps
+    # delivering move events even once the cursor leaves the SVG, same as the bed-drag-clamp
+    # test above, so the drop point is well outside the plot.
+    start = _svg_click_point(page, 10, 10, 2, 2)
+    end = _svg_click_point(page, 10, 10, 30, 30)
+    page.mouse.move(*start)
+    page.mouse.down()
+    page.mouse.move(*end, steps=5)
+    with page.expect_response(lambda r: "/polygons" in r.url):
+        page.mouse.up()
+
+    points = json.loads(db.list_shade_polygons_for_source(source_id)[0]["points"])
+    assert points[0] == pytest.approx([10, 10], abs=0.05)
+
+
 def test_dragging_an_existing_polygon_vertex_persists_the_update(page, live_server_url):
     plot_id = _make_plot(width_ft=20, length_ft=20)
     source_id = _add_shade_source(plot_id)
     db.save_shade_polygon(source_id, "summer_solstice", "full", json.dumps([[2, 2], [6, 2], [6, 6]]))
     page.goto(f"{live_server_url}/land-plots/{plot_id}/map")
 
+    _expand_shade_type(page, source_id)
     _draw_button(page, source_id).click()  # already drawn -- enters editing mode with draggable vertices
 
     # Freehand polygon points use the true (letterboxed) render scale -- unlike bed drag/resize,
@@ -187,6 +235,7 @@ def test_exit_button_reads_cancel_while_drawing_a_fresh_shape(page, live_server_
     source_id = _add_shade_source(plot_id)
     page.goto(f"{live_server_url}/land-plots/{plot_id}/map")
 
+    _expand_shade_type(page, source_id)
     _draw_button(page, source_id).click()
     assert page.locator("#shade-draw-status button").inner_text() == "Cancel"
 
@@ -197,6 +246,7 @@ def test_exit_button_reads_done_once_editing_an_existing_polygon(page, live_serv
     db.save_shade_polygon(source_id, "summer_solstice", "full", json.dumps([[2, 2], [6, 2], [6, 6]]))
     page.goto(f"{live_server_url}/land-plots/{plot_id}/map")
 
+    _expand_shade_type(page, source_id)
     _draw_button(page, source_id).click()
     assert page.locator("#shade-draw-status button").inner_text() == "Done"
 
@@ -209,6 +259,7 @@ def test_clicking_done_restores_bed_click_navigation(page, live_server_url):
     db.save_shade_polygon(source_id, "summer_solstice", "full", json.dumps([[10, 10], [10, 12], [12, 12]]))
     page.goto(f"{live_server_url}/land-plots/{plot_id}/map")
 
+    _expand_shade_type(page, source_id)
     _draw_button(page, source_id).click()
     page.locator("#shade-draw-status button").click()  # "Done"
 
@@ -223,6 +274,7 @@ def test_deleting_a_shade_polygon_via_its_sidebar_button_removes_it(page, live_s
     db.save_shade_polygon(source_id, "summer_solstice", "full", json.dumps([[2, 2], [6, 2], [6, 6]]))
     page.goto(f"{live_server_url}/land-plots/{plot_id}/map")
 
+    _expand_shade_type(page, source_id)
     delete_button = page.locator(
         '.shade-combo-row[data-season="summer_solstice"][data-shade-type="full"] .shade-delete-polygon-button'
     )

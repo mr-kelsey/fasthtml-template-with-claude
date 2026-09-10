@@ -348,7 +348,10 @@
 
         function onMove(e) {
             var nowFeet = toFeetTrue(e.clientX, e.clientY);
-            var pt = { x: origin.x + (nowFeet.x - startFeet.x), y: origin.y + (nowFeet.y - startFeet.y) };
+            var pt = {
+                x: clamp(origin.x + (nowFeet.x - startFeet.x), 0, plotWidth),
+                y: clamp(origin.y + (nowFeet.y - startFeet.y), 0, plotLength),
+            };
             drawState.points[index] = pt;
             handle.setAttribute("cx", pt.x);
             handle.setAttribute("cy", pt.y);
@@ -372,6 +375,14 @@
         handle.addEventListener("pointercancel", cleanup);
     }
 
+    function ensureArmedTypeGroupExpanded() {
+        if (!drawState.active) return;
+        var item = document.querySelector('.shade-source-item[data-source-id="' + drawState.sourceId + '"]');
+        var group = item ? item.querySelector('.shade-type-group[data-shade-type="' + drawState.shadeType + '"]') : null;
+        var rows = group ? group.querySelector(".shade-season-rows") : null;
+        if (rows) rows.hidden = false;
+    }
+
     function renderDraft() {
         if (!shadeDrawLayer) return;
         // A bed group's onclick navigates to its detail page (pages/land_plots.py's _bed_group) --
@@ -379,6 +390,7 @@
         // doesn't navigate away instead. pointerdown-based bed drag/resize is separately disabled
         // by the `if (drawState.active) return;` guard in the pointerdown listener below.
         window.__shadeDrawActive = drawState.active;
+        ensureArmedTypeGroupExpanded();
         updateDrawStatus();
         highlightDrawButtons();
         clearShadeDrawLayer();
@@ -463,6 +475,13 @@
 
     if (shadeDrawLayer && shadeData) {
         document.addEventListener("click", function (e) {
+            var typeToggle = e.target.closest(".shade-type-toggle");
+            if (typeToggle) {
+                var group = typeToggle.closest(".shade-type-group");
+                var rows = group ? group.querySelector(".shade-season-rows") : null;
+                if (rows) rows.hidden = !rows.hidden;
+                return;
+            }
             var drawButton = e.target.closest(".shade-draw-button");
             if (drawButton) {
                 var sourceId = parseInt(drawButton.getAttribute("data-source-id"), 10);
@@ -497,7 +516,8 @@
 
         svg.addEventListener("click", function (e) {
             if (!drawState.active || drawState.editingExisting) return;
-            var point = toFeetTrue(e.clientX, e.clientY);
+            var rawPoint = toFeetTrue(e.clientX, e.clientY);
+            var point = { x: clamp(rawPoint.x, 0, plotWidth), y: clamp(rawPoint.y, 0, plotLength) };
             if (drawState.points.length >= 3) {
                 var first = drawState.points[0];
                 var dx = point.x - first.x;

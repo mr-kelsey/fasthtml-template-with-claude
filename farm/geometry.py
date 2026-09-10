@@ -20,19 +20,15 @@ def _day_of_year(on_date):
     return on_date.timetuple().tm_yday
 
 
-def _circular_distance(a, b, period=365):
-    diff = abs(a - b) % period
-    return min(diff, period - diff)
-
-
-def nearest_solstice(on_date):
-    """Returns 'summer_solstice' or 'winter_solstice' -- whichever on_date's day-of-year is
-    closer to by circular distance. Crosses over at the equinoxes automatically, since those
-    are the equidistant points on the annual circle between the two solstices."""
+def _season_weight(on_date):
+    """Continuous summer<->winter blend weight in [0, 1]: 1.0 at the summer solstice, 0.0 at the
+    winter solstice, smoothly crossing ~0.5 near both equinoxes via a cosine curve. Replaces a
+    hard nearest-solstice cutover so shade grows/shrinks gradually across the year instead of
+    jumping instantly at the equinox."""
     doy = _day_of_year(on_date)
     summer_doy = _day_of_year(on_date.replace(month=_SUMMER_SOLSTICE_MONTH_DAY[0], day=_SUMMER_SOLSTICE_MONTH_DAY[1]))
-    winter_doy = _day_of_year(on_date.replace(month=_WINTER_SOLSTICE_MONTH_DAY[0], day=_WINTER_SOLSTICE_MONTH_DAY[1]))
-    return "summer_solstice" if _circular_distance(doy, summer_doy) <= _circular_distance(doy, winter_doy) else "winter_solstice"
+    angle = 2 * math.pi * (doy - summer_doy) / 365
+    return (math.cos(angle) + 1) / 2
 
 
 def point_in_polygon(x, y, points):
@@ -49,6 +45,24 @@ def point_in_polygon(x, y, points):
     return inside
 
 
+def _point_segment_distance(px, py, ax, ay, bx, by):
+    dx, dy = bx - ax, by - ay
+    if dx == 0 and dy == 0:
+        return math.hypot(px - ax, py - ay)
+    t = max(0, min(1, ((px - ax) * dx + (py - ay) * dy) / (dx * dx + dy * dy)))
+    return math.hypot(px - (ax + t * dx), py - (ay + t * dy))
+
+
+def signed_distance_to_polygon(x, y, points):
+    "Positive inside, negative outside. Magnitude is the distance to the nearest edge."
+    n = len(points)
+    distance = min(
+        _point_segment_distance(x, y, points[i][0], points[i][1], points[(i + 1) % n][0], points[(i + 1) % n][1])
+        for i in range(n)
+    )
+    return distance if point_in_polygon(x, y, points) else -distance
+
+
 def bed_local_to_plot(bed, x_in, y_in):
     """Converts a bed-local inch position to plot-space feet, mirroring the SVG bed-group
     transform translate(x,y) rotate(rotation_deg,cx,cy) used by pages/land_plots.py's
@@ -62,12 +76,44 @@ def bed_local_to_plot(bed, x_in, y_in):
     return bed["x"] + cx + rx, bed["y"] + cy + ry
 
 
-def classify_point_shade(plot_x, plot_y, season, shade_polygons):
-    "shade_polygons: iterable of {season, shade_type, points}. Darkest matching polygon wins."
-    matching = [p for p in shade_polygons if p["season"] == season]
-    if any(p["shade_type"] == "full" and point_in_polygon(plot_x, plot_y, p["points"]) for p in matching):
+def _blended_signed_distance(x, y, season_points, t):
+    "season_points: {'summer_solstice': points_or_None, 'winter_solstice': points_or_None}."
+    summer_points = season_points.get("summer_solstice")
+    winter_points = season_points.get("winter_solstice")
+    if summer_points and winter_points:
+        return t * signed_distance_to_polygon(x, y, summer_points) + (1 - t) * signed_distance_to_polygon(
+            x, y, winter_points
+        )
+    if summer_points:
+        return signed_distance_to_polygon(x, y, summer_points)
+    if winter_points:
+        return signed_distance_to_polygon(x, y, winter_points)
+    return -math.inf
+
+
+def classify_point_shade(plot_x, plot_y, on_date, shade_polygons):
+    """shade_polygons: iterable of {shade_source_id, season, shade_type, points}. Groups each
+    source's summer/winter pair per shade_type and blends between them by the date's seasonal
+    weight (a source with only one season drawn falls back to that polygon, unblended). Darkest
+    matching group wins."""
+    t = _season_weight(on_date)
+    by_group = {}
+    for p in shade_polygons:
+        group = by_group.setdefault((p["shade_source_id"], p["shade_type"]), {})
+        group[p["season"]] = p["points"]
+
+    def any_group_contains(shade_type):
+        # >= 0, not > 0: a point exactly on a polygon's edge has signed distance 0 and still
+        # counts as inside, matching point_in_polygon's own boundary-inclusive semantics.
+        return any(
+            _blended_signed_distance(plot_x, plot_y, seasons, t) >= 0
+            for (source_id, group_type), seasons in by_group.items()
+            if group_type == shade_type
+        )
+
+    if any_group_contains("full"):
         return "full_shade"
-    if any(p["shade_type"] == "partial" and point_in_polygon(plot_x, plot_y, p["points"]) for p in matching):
+    if any_group_contains("partial"):
         return "partial_shade"
     return "full_sun"
 
@@ -77,8 +123,7 @@ def classify_bed_cell_shade(bed, x_in, y_in, on_date, shade_polygons):
     if bed["x"] is None or bed["y"] is None:
         return "full_sun"
     plot_x, plot_y = bed_local_to_plot(bed, x_in, y_in)
-    season = nearest_solstice(on_date)
-    return classify_point_shade(plot_x, plot_y, season, shade_polygons)
+    return classify_point_shade(plot_x, plot_y, on_date, shade_polygons)
 
 
 def shade_exceeds_tolerance(bed, x_in, y_in, planted_date, maturity_end_date, sun_needs, shade_polygons):

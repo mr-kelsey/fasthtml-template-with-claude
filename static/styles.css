@@ -396,6 +396,33 @@ button.variety-palette-item.armed {
     width: auto;
 }
 
+.shade-type-group {
+    margin-top: 0.35rem;
+}
+
+.shade-type-toggle {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+    width: 100%;
+    margin: 0;
+    padding: 0.3rem 0.5rem;
+    font-size: 0.9rem;
+    background: var(--pico-muted-border-color);
+    color: inherit;
+}
+
+.shade-type-badge {
+    font-size: 0.75rem;
+    font-weight: normal;
+    opacity: 0.75;
+}
+
+.shade-season-rows {
+    padding: 0.25rem 0.5rem 0;
+}
+
 .shade-cell {
     pointer-events: none;
 }
