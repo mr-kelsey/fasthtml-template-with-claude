@@ -1,11 +1,17 @@
+import json
+
 from fasthtml import common as fast
 from fasthtml.svg import Svg, Rect, G, Text, Defs, Pattern, Path
 
 from farm.layout import layout
-from farm.helpers import parse_required_int, parse_optional_int
+from farm.helpers import parse_required_int, parse_optional_int, SEASON_OPTIONS, SHADE_TYPE_OPTIONS
 import db
 
 router = fast.APIRouter()
+
+SEASON_LABELS = {"summer_solstice": "Summer solstice", "winter_solstice": "Winter solstice"}
+SHADE_TYPE_LABELS = {"full": "Full shade", "partial": "Partial shade"}
+SHADE_COMBOS = [(season, shade_type) for season in SEASON_OPTIONS for shade_type in SHADE_TYPE_OPTIONS]
 
 # Bed labels are sized off the bed's own dimensions -- and the label text length, so a long
 # label on a narrow bed shrinks to fit rather than overflowing -- so a label never dwarfs its
@@ -154,6 +160,97 @@ def _unplaced_bed_item(bed):
     )
 
 
+def _shade_combo_key(season, shade_type):
+    return f"{season}:{shade_type}"
+
+
+def _source_polygons_dict(source_id):
+    """The source's up-to-4 polygons, keyed by every (season, shade_type) combo -- None where
+    nothing's drawn yet, else {"id": polygon_id, "points": [[x,y],...]}."""
+    rows = db.list_shade_polygons_for_source(source_id)
+    by_key = {
+        _shade_combo_key(r["season"], r["shade_type"]): {"id": r["id"], "points": json.loads(r["points"])}
+        for r in rows
+    }
+    return {_shade_combo_key(season, shade_type): by_key.get(_shade_combo_key(season, shade_type)) for season, shade_type in SHADE_COMBOS}
+
+
+def _shade_map_data(plot_id, shade_sources):
+    return {
+        "plot_id": plot_id,
+        "shade_sources": [
+            {"id": source["id"], "label": source["label"], "polygons": _source_polygons_dict(source["id"])}
+            for source in shade_sources
+        ],
+    }
+
+
+def _shade_combo_row(source, season, shade_type, polygon):
+    drawn = polygon is not None
+    return fast.Div(
+        fast.Span(f"{SEASON_LABELS[season]} / {SHADE_TYPE_LABELS[shade_type]}"),
+        fast.Button(
+            "Edit" if drawn else "Draw",
+            type="button",
+            cls="shade-draw-button",
+            data_source_id=str(source["id"]),
+            data_season=season,
+            data_shade_type=shade_type,
+        ),
+        fast.Button(
+            "Delete",
+            type="button",
+            cls="shade-delete-polygon-button",
+            data_polygon_id=str(polygon["id"]) if drawn else "",
+            hidden=not drawn,
+        ),
+        cls="shade-combo-row",
+        data_season=season,
+        data_shade_type=shade_type,
+    )
+
+
+def _shade_source_item(source, polygons_dict):
+    return fast.Div(
+        fast.Div(
+            fast.Strong(source["label"]),
+            fast.Form(
+                fast.Button("Delete source", type="submit"),
+                method="post",
+                action=f"/shade-sources/{source['id']}/delete",
+            ),
+            cls="shade-source-header",
+        ),
+        *[
+            _shade_combo_row(source, season, shade_type, polygons_dict[_shade_combo_key(season, shade_type)])
+            for season, shade_type in SHADE_COMBOS
+        ],
+        cls="shade-source-item",
+        data_source_id=str(source["id"]),
+    )
+
+
+def _add_shade_source_form(plot_id):
+    return fast.Form(
+        fast.Input(name="label", placeholder="Shade source (e.g. Oak tree, Barn)", required=True),
+        fast.Button("Add Source", type="submit"),
+        method="post",
+        action=f"/land-plots/{plot_id}/shade-sources",
+    )
+
+
+def _shade_sidebar(plot_id, shade_sources_data):
+    sources = shade_sources_data["shade_sources"]
+    return fast.Div(
+        fast.H2("Shade sources"),
+        fast.Div(*[_shade_source_item(source, source["polygons"]) for source in sources], id="shade-sources-list")
+        if sources
+        else fast.P("No shade sources yet.", id="shade-sources-list"),
+        _add_shade_source_form(plot_id),
+        cls="land-map-sidebar",
+    )
+
+
 def _label_font_size(width_ft, length_ft, label):
     "Returns None when no legible size fits the bed (caller hides the label in that case)."
     if min(width_ft, length_ft) < MIN_BED_DIM_FOR_LABEL:
@@ -180,7 +277,9 @@ def _bed_group(bed):
         id=f"bed-{bed['id']}",
         cls="bed-group",
         transform=f"translate({x},{y}) rotate({bed['rotation_deg']},{center_x},{center_y})",
-        onclick=f"window.location.href='/beds/{bed['id']}'",
+        # Guarded on window.__shadeDrawActive (set by land-map.js) so clicking a bed to place a
+        # shade-polygon vertex over it doesn't navigate away instead.
+        onclick=f"if (!window.__shadeDrawActive) window.location.href='/beds/{bed['id']}'",
     )
 
 
@@ -192,6 +291,8 @@ def land_plot_map_page(plot_id: int):
     beds = db.list_beds_for_plot(plot_id)
     placed_beds = [b for b in beds if b["x"] is not None and b["y"] is not None]
     unplaced_beds = [b for b in beds if b["x"] is None or b["y"] is None]
+    shade_sources = db.list_shade_sources_for_plot(plot_id)
+    shade_data = _shade_map_data(plot_id, shade_sources)
     canvas = Svg(
         Defs(
             Pattern(
@@ -202,6 +303,7 @@ def land_plot_map_page(plot_id: int):
         Rect(plot["width_ft"], plot["length_ft"], cls="grid-bg"),
         Rect(plot["width_ft"], plot["length_ft"], cls="plot-boundary"),
         *[_bed_group(bed) for bed in placed_beds],
+        G(id="shade-draw-layer"),
         viewBox=f"0 0 {plot['width_ft']} {plot['length_ft']}",
         cls="land-map-svg",
         id="land-map-svg",
@@ -215,7 +317,7 @@ def land_plot_map_page(plot_id: int):
         title="Map is drawn with north at the top",
     )
     canvas_wrap = fast.Div(canvas, compass, cls="land-map-canvas-wrap")
-    sidebar = fast.Div(
+    beds_sidebar = fast.Div(
         fast.H2("Unplaced beds"),
         fast.Ul(*[_unplaced_bed_item(b) for b in unplaced_beds]) if unplaced_beds else fast.P("None."),
         fast.H2("Add a bed"),
@@ -226,7 +328,9 @@ def land_plot_map_page(plot_id: int):
         f"{plot['name']} Map",
         fast.H1(f"{plot['name']} ({plot['width_ft']} x {plot['length_ft']} ft)"),
         fast.A("All plots", href="/land-plots"),
-        fast.Div(canvas_wrap, sidebar, cls="land-map-layout"),
+        fast.Script(json.dumps(shade_data), type="application/json", id="shade-map-data"),
+        fast.Div(id="shade-draw-status", cls="shade-draw-status", hidden=True),
+        fast.Div(canvas_wrap, beds_sidebar, _shade_sidebar(plot_id, shade_data), cls="land-map-layout"),
         fast.Script(src="/land-map.js"),
     )
 
@@ -406,6 +510,72 @@ def delete_bed_route(bed_id: int):
         return fast.Redirect("/land-plots")
     db.delete_bed(bed_id)
     return fast.Redirect(f"/land-plots/{bed['plot_id']}/map")
+
+
+@router("/land-plots/{plot_id}/shade-sources", methods=["post"])
+def add_shade_source_route(plot_id: int, label: str):
+    plot = db.get_land_plot(plot_id)
+    if plot is None:
+        return fast.Response("Land plot not found.", status_code=404)
+    label = label.strip()
+    if not label:
+        return fast.Response("Label is required.", status_code=422)
+    db.add_shade_source(plot_id, label)
+    return fast.Redirect(f"/land-plots/{plot_id}/map")
+
+
+@router("/shade-sources/{source_id}/delete", methods=["post"])
+def delete_shade_source_route(source_id: int):
+    source = db.get_shade_source(source_id)
+    if source is None:
+        return fast.Redirect("/land-plots")
+    db.delete_shade_source(source_id)
+    return fast.Redirect(f"/land-plots/{source['plot_id']}/map")
+
+
+def _validate_polygon_points(raw_points):
+    """Returns (list of [x, y] float pairs, None) or (None, error_message). No bound-clamping
+    against the plot -- a shade source (e.g. a tree just past the fence line) can sit outside it
+    and still shade into it."""
+    try:
+        parsed = json.loads(raw_points)
+    except (TypeError, ValueError):
+        return None, "Invalid points payload."
+    if not isinstance(parsed, list) or len(parsed) < 3:
+        return None, "A shade polygon needs at least 3 points."
+    points = []
+    for item in parsed:
+        try:
+            x, y = float(item[0]), float(item[1])
+        except (TypeError, ValueError, IndexError, KeyError):
+            return None, "Invalid point payload."
+        points.append([x, y])
+    return points, None
+
+
+@router("/shade-sources/{source_id}/polygons", methods=["post"])
+def save_shade_polygon_route(source_id: int, season: str, shade_type: str, points: str):
+    "Fetch-based -- land-map.js persists a drawn/edited polygon and syncs local state from the JSON response."
+    source = db.get_shade_source(source_id)
+    if source is None:
+        return fast.Response("Shade source not found.", status_code=404)
+    if season not in SEASON_OPTIONS:
+        return fast.Response("Invalid season.", status_code=422)
+    if shade_type not in SHADE_TYPE_OPTIONS:
+        return fast.Response("Invalid shade type.", status_code=422)
+    parsed_points, error = _validate_polygon_points(points)
+    if error:
+        return fast.Response(error, status_code=422)
+    polygon_id = db.save_shade_polygon(source_id, season, shade_type, json.dumps(parsed_points))
+    return fast.Response(json.dumps({"id": polygon_id, "points": parsed_points}), media_type="application/json")
+
+
+@router("/shade-polygons/{polygon_id}/delete", methods=["post"])
+def delete_shade_polygon_route(polygon_id: int):
+    if db.get_shade_polygon(polygon_id) is None:
+        return fast.Response("Shade polygon not found.", status_code=404)
+    db.delete_shade_polygon(polygon_id)
+    return fast.Response(status_code=204)
 
 
 # Bed detail rendering (variety-palette + spacing-lattice planting UI) lives in

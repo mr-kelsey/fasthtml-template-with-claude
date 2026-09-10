@@ -25,6 +25,10 @@ SUN_NEEDS_OPTIONS = ["full_sun", "partial_shade", "full_shade"]
 
 RELATION_OPTIONS = ["companion", "antagonist"]
 
+SEASON_OPTIONS = ["summer_solstice", "winter_solstice"]
+
+SHADE_TYPE_OPTIONS = ["full", "partial"]
+
 # Fixed rotation for auto-assigning seed_varieties.color_hex at creation (round-robin by existing
 # count); user can still override before submit. Distinct enough to tell staged/planted dots apart.
 COLOR_PALETTE = [

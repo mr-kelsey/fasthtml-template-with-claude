@@ -1308,6 +1308,120 @@ def test_add_planting_defaults_quantity_culled_to_none():
     assert db.get_planting(planting_id)["quantity_culled"] is None
 
 
+def test_list_shade_sources_for_plot_returns_empty_list_when_none_exist():
+    plot_id = _add_plot()
+    assert db.list_shade_sources_for_plot(plot_id) == []
+
+
+def test_add_shade_source_persists_label():
+    plot_id = _add_plot()
+    db.add_shade_source(plot_id, "Oak tree")
+    assert db.list_shade_sources_for_plot(plot_id)[0]["label"] == "Oak tree"
+
+
+def test_get_shade_source_returns_matching_row():
+    plot_id = _add_plot()
+    db.add_shade_source(plot_id, "Oak tree")
+    source_id = db.list_shade_sources_for_plot(plot_id)[0]["id"]
+    assert db.get_shade_source(source_id)["label"] == "Oak tree"
+
+
+def test_get_shade_source_returns_none_when_not_found():
+    assert db.get_shade_source(999999) is None
+
+
+def test_delete_shade_source_removes_it():
+    plot_id = _add_plot()
+    db.add_shade_source(plot_id, "To delete")
+    source_id = db.list_shade_sources_for_plot(plot_id)[0]["id"]
+    db.delete_shade_source(source_id)
+    assert db.list_shade_sources_for_plot(plot_id) == []
+
+
+def test_delete_shade_source_cascades_to_its_polygons():
+    plot_id = _add_plot()
+    db.add_shade_source(plot_id, "Oak tree")
+    source_id = db.list_shade_sources_for_plot(plot_id)[0]["id"]
+    db.save_shade_polygon(source_id, "summer_solstice", "full", '[[0,0],[0,1],[1,1]]')
+    db.delete_shade_source(source_id)
+    assert db.list_shade_polygons_for_source(source_id) == []
+
+
+def test_save_shade_polygon_persists_points():
+    plot_id = _add_plot()
+    db.add_shade_source(plot_id, "Oak tree")
+    source_id = db.list_shade_sources_for_plot(plot_id)[0]["id"]
+    db.save_shade_polygon(source_id, "summer_solstice", "full", '[[0,0],[0,1],[1,1]]')
+    polygon = db.list_shade_polygons_for_source(source_id)[0]
+    assert polygon["points"] == '[[0,0],[0,1],[1,1]]'
+
+
+def test_save_shade_polygon_upserts_in_place_for_the_same_season_and_type():
+    plot_id = _add_plot()
+    db.add_shade_source(plot_id, "Oak tree")
+    source_id = db.list_shade_sources_for_plot(plot_id)[0]["id"]
+    db.save_shade_polygon(source_id, "summer_solstice", "full", '[[0,0],[0,1],[1,1]]')
+    db.save_shade_polygon(source_id, "summer_solstice", "full", '[[0,0],[0,2],[2,2]]')
+    assert len(db.list_shade_polygons_for_source(source_id)) == 1
+
+
+def test_save_shade_polygon_returns_the_same_id_on_update():
+    plot_id = _add_plot()
+    db.add_shade_source(plot_id, "Oak tree")
+    source_id = db.list_shade_sources_for_plot(plot_id)[0]["id"]
+    first_id = db.save_shade_polygon(source_id, "summer_solstice", "full", '[[0,0],[0,1],[1,1]]')
+    second_id = db.save_shade_polygon(source_id, "summer_solstice", "full", '[[0,0],[0,2],[2,2]]')
+    assert first_id == second_id
+
+
+def test_save_shade_polygon_keeps_different_season_type_combos_separate():
+    plot_id = _add_plot()
+    db.add_shade_source(plot_id, "Oak tree")
+    source_id = db.list_shade_sources_for_plot(plot_id)[0]["id"]
+    db.save_shade_polygon(source_id, "summer_solstice", "full", '[[0,0],[0,1],[1,1]]')
+    db.save_shade_polygon(source_id, "winter_solstice", "partial", '[[0,0],[0,2],[2,2]]')
+    assert len(db.list_shade_polygons_for_source(source_id)) == 2
+
+
+def test_get_shade_polygon_returns_matching_row():
+    plot_id = _add_plot()
+    db.add_shade_source(plot_id, "Oak tree")
+    source_id = db.list_shade_sources_for_plot(plot_id)[0]["id"]
+    polygon_id = db.save_shade_polygon(source_id, "summer_solstice", "full", '[[0,0],[0,1],[1,1]]')
+    assert db.get_shade_polygon(polygon_id)["shade_type"] == "full"
+
+
+def test_delete_shade_polygon_removes_it():
+    plot_id = _add_plot()
+    db.add_shade_source(plot_id, "Oak tree")
+    source_id = db.list_shade_sources_for_plot(plot_id)[0]["id"]
+    polygon_id = db.save_shade_polygon(source_id, "summer_solstice", "full", '[[0,0],[0,1],[1,1]]')
+    db.delete_shade_polygon(polygon_id)
+    assert db.list_shade_polygons_for_source(source_id) == []
+
+
+def test_list_shade_polygons_for_plot_spans_every_source_on_the_plot():
+    plot_id = _add_plot()
+    db.add_shade_source(plot_id, "Oak tree")
+    db.add_shade_source(plot_id, "Barn")
+    source_ids = [s["id"] for s in db.list_shade_sources_for_plot(plot_id)]
+    for source_id in source_ids:
+        db.save_shade_polygon(source_id, "summer_solstice", "full", '[[0,0],[0,1],[1,1]]')
+    assert len(db.list_shade_polygons_for_plot(plot_id)) == 2
+
+
+def test_list_shade_polygons_for_plot_excludes_other_plots_sources():
+    db.add_land_plot("Plot A", 40, 60)
+    db.add_land_plot("Plot B", 40, 60)
+    plots_by_name = {p["name"]: p["id"] for p in db.list_land_plots()}
+    plot_a_id, plot_b_id = plots_by_name["Plot A"], plots_by_name["Plot B"]
+    db.add_shade_source(plot_a_id, "Oak tree")
+    db.add_shade_source(plot_b_id, "Barn")
+    source_a_id = db.list_shade_sources_for_plot(plot_a_id)[0]["id"]
+    db.save_shade_polygon(source_a_id, "summer_solstice", "full", '[[0,0],[0,1],[1,1]]')
+    assert len(db.list_shade_polygons_for_plot(plot_b_id)) == 0
+
+
 def test_set_quantity_germinated_updates_only_target_planting():
     variety_id = _add_variety()
     planting_id = db.add_planting(variety_id, "2026-05-01")

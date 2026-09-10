@@ -1,3 +1,5 @@
+import json
+
 import db
 
 
@@ -236,3 +238,51 @@ def test_dismissing_the_undercount_confirm_plants_nothing(page, live_server_url)
 def test_dismissing_the_undercount_confirm_leaves_the_page_unsubmitted(page, live_server_url):
     bed_id = _dismiss_undercount_batch(page, live_server_url)
     assert page.url.rstrip("/").endswith(f"/beds/{bed_id}")
+
+
+def _make_bed_with_plot(width_ft=2, length_ft=2, label="Bed A"):
+    "Like _make_bed, but also places the bed at the plot origin and returns the plot_id -- shade classification needs a real plot position."
+    db.add_land_plot("Test Plot", 20, 20)
+    plot_id = db.list_land_plots()[0]["id"]
+    db.add_bed(plot_id, label, width_ft, length_ft)
+    bed_id = db.list_beds_for_plot(plot_id)[0]["id"]
+    db.update_bed_position(bed_id, 0, 0)
+    return plot_id, bed_id
+
+
+_FULL_COVERAGE_SQUARE = json.dumps([[-10, -10], [-10, 10], [10, 10], [10, -10]])
+
+
+def test_shade_tint_appears_for_a_drawn_full_shade_polygon(page, live_server_url):
+    plot_id, bed_id = _make_bed_with_plot(width_ft=1, length_ft=1)
+    db.add_shade_source(plot_id, "Oak tree")
+    source_id = db.list_shade_sources_for_plot(plot_id)[0]["id"]
+    db.save_shade_polygon(source_id, "summer_solstice", "full", _FULL_COVERAGE_SQUARE)
+
+    page.goto(f"{live_server_url}/beds/{bed_id}")
+    with page.expect_response(lambda r: "/shade-grid" in r.url):
+        page.locator("#shade-date").fill("2026-06-15")
+
+    cell = page.locator("#shade-layer rect.shade-cell")
+    assert "full_shade" in cell.get_attribute("class")
+
+
+def test_shade_warning_marker_appears_for_a_full_sun_variety_in_full_shade(page, live_server_url):
+    plot_id, bed_id = _make_bed_with_plot(width_ft=2, length_ft=2)  # 24in x 24in
+    db.add_seed_variety(
+        "Lettuce", "Buttercrunch", "Asteraceae", spacing_in=8, sun_needs="full_sun",
+        days_to_maturity_min=1, days_to_maturity_max=5, color_hex="#00ff00",
+    )
+    variety_id = db.list_seed_varieties()[0]["id"]
+    _add_seed_lot(variety_id)
+    db.add_shade_source(plot_id, "Oak tree")
+    source_id = db.list_shade_sources_for_plot(plot_id)[0]["id"]
+    db.save_shade_polygon(source_id, "summer_solstice", "full", _FULL_COVERAGE_SQUARE)
+
+    page.goto(f"{live_server_url}/beds/{bed_id}")
+    _arm_seed_variety(page, variety_id)
+    with page.expect_response(lambda r: "/shade-warnings" in r.url):
+        page.locator("#batch-planted-date").fill("2026-06-01")
+
+    warned = page.locator('#lattice-layer circle[cx="0"][cy="0"]')
+    assert "shade-warning" in warned.get_attribute("class")

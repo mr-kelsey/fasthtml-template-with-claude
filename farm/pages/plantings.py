@@ -4,6 +4,7 @@ from datetime import date
 from fasthtml import common as fast
 from fasthtml.svg import Svg, Rect, Circle, G, Defs, Pattern, Path
 
+from farm import geometry
 from farm.layout import layout
 from farm.helpers import parse_optional_int, parse_optional_float, parse_required_float, compute_window
 import db
@@ -471,6 +472,7 @@ def _bed_canvas(bed, plantings):
         ),
         Rect(width_in, length_in, cls="grid-bg-detail"),
         Rect(width_in, length_in, cls="bed-boundary"),
+        G(id="shade-layer"),
         G(*[_planting_dot(p) for p in plantings if p["x_in"] is not None], id="planted-layer"),
         G(id="lattice-layer"),
         G(id="staged-layer"),
@@ -537,7 +539,7 @@ def _batch_plant_form(bed_id):
         fast.Input(type="hidden", name="source_type", id="batch-source-type"),
         fast.Input(type="hidden", name="points", id="batch-points"),
         fast.Div(id="batch-staged-count"),
-        fast.Input(name="planted_date", type="date", required=True),
+        fast.Input(name="planted_date", type="date", id="batch-planted-date", required=True),
         fast.Input(name="soil_temp_f", type="number", step="0.1", placeholder="Soil temp (F, optional)"),
         fast.Select(fast.Option("Choose a transplant lot", value=""), name="transplant_lot_id", id="batch-transplant-lot-select", hidden=True),
         fast.Label(
@@ -608,11 +610,15 @@ def bed_detail_page(bed_id: int):
         hx_trigger="click",
         hx_on__after_request="document.getElementById('bed-dialog').showModal()",
     )
+    shade_date_picker = fast.Label(
+        "Shade as of:", fast.Input(type="date", id="shade-date", value=date.today().isoformat())
+    )
     return layout(
         f"{bed['label']} Detail",
         fast.H1(f"{bed['label']} ({bed['width_ft']} x {bed['length_ft']} ft)"),
         fast.A("Back to plot map", href=f"/land-plots/{bed['plot_id']}/map"),
         edit_bed_button,
+        shade_date_picker,
         fast.Script(json.dumps(data), type="application/json", id="bed-detail-data"),
         fast.Div(canvas, palette, cls="bed-detail-layout"),
         _batch_plant_form(bed_id),
@@ -691,3 +697,56 @@ def batch_plant_route(
         transplant_lot_id=validated_transplant_lot_id, soil_temp_f=soil_temp_f_value,
     )
     return fast.Redirect(f"/beds/{bed_id}")
+
+
+def _load_shade_polygons(plot_id):
+    "shade_polygons_for_plot's rows with points parsed into (x, y) tuples, ready for farm.geometry."
+    rows = db.list_shade_polygons_for_plot(plot_id)
+    return [
+        {"season": r["season"], "shade_type": r["shade_type"], "points": [tuple(p) for p in json.loads(r["points"])]}
+        for r in rows
+    ]
+
+
+@router("/beds/{bed_id}/shade-grid", methods=["get"])
+def bed_shade_grid_route(bed_id: int, on_date: str = ""):
+    "One classified cell per foot -- the existing 12in grid is already exactly width_ft x length_ft cells."
+    bed = db.get_bed(bed_id)
+    if bed is None:
+        return fast.Response("Bed not found.", status_code=404)
+    day = _parse_date_or_none(on_date) or date.today()
+    shade_polygons = _load_shade_polygons(bed["plot_id"])
+    cols, rows = bed["width_ft"], bed["length_ft"]
+    cells = [
+        [geometry.classify_bed_cell_shade(bed, col * 12 + 6, row * 12 + 6, day, shade_polygons) for col in range(cols)]
+        for row in range(rows)
+    ]
+    return fast.Response(json.dumps({"cols": cols, "rows": rows, "cells": cells}), media_type="application/json")
+
+
+@router("/beds/{bed_id}/shade-warnings", methods=["post"])
+def bed_shade_warnings_route(bed_id: int, variety_id: str, planted_date: str, points: str):
+    "Returns {'warnings': [bool, ...]} in the same order as the submitted points -- non-blocking, decoration only."
+    bed = db.get_bed(bed_id)
+    if bed is None:
+        return fast.Response("Bed not found.", status_code=404)
+    validated_variety_id = _validate_variety_id(variety_id)
+    if isinstance(validated_variety_id, fast.Response):
+        return validated_variety_id
+    variety = db.get_seed_variety(validated_variety_id)
+    planted = _parse_date_or_none(planted_date)
+    if planted is None:
+        return fast.Response("Invalid planted date.", status_code=422)
+    width_in = bed["width_ft"] * 12
+    length_in = bed["length_ft"] * 12
+    parsed_points, error = _validate_points(points, width_in, length_in)
+    if error:
+        return fast.Response(error, status_code=422)
+    window = compute_window(planted_date, variety["days_to_maturity_min"], variety["days_to_maturity_max"])
+    maturity_end = window[1] if window else planted
+    shade_polygons = _load_shade_polygons(bed["plot_id"])
+    warnings = [
+        geometry.shade_exceeds_tolerance(bed, x_in, y_in, planted, maturity_end, variety["sun_needs"], shade_polygons)
+        for x_in, y_in in parsed_points
+    ]
+    return fast.Response(json.dumps({"warnings": warnings}), media_type="application/json")

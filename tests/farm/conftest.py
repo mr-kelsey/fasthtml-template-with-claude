@@ -102,6 +102,26 @@ def _clean_seed_varieties():
 
 
 @pytest.fixture(autouse=True)
+def _clean_shade_polygons():
+    "Start and end each test with an empty shade_polygons table (cleaned before shade_sources, its parent)."
+    with db.engine.begin() as db_connection:
+        db_connection.execute(text("DELETE FROM shade_polygons"))
+    yield
+    with db.engine.begin() as db_connection:
+        db_connection.execute(text("DELETE FROM shade_polygons"))
+
+
+@pytest.fixture(autouse=True)
+def _clean_shade_sources():
+    "Start and end each test with an empty shade_sources table (cleaned before land_plots, its parent)."
+    with db.engine.begin() as db_connection:
+        db_connection.execute(text("DELETE FROM shade_sources"))
+    yield
+    with db.engine.begin() as db_connection:
+        db_connection.execute(text("DELETE FROM shade_sources"))
+
+
+@pytest.fixture(autouse=True)
 def _clean_beds():
     "Start and end each test with an empty beds table (cleaned before land_plots, its parent)."
     with db.engine.begin() as db_connection:

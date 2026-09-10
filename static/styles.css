@@ -326,3 +326,93 @@ button.variety-palette-item.armed {
     border-radius: 50%;
     flex: 0 0 auto;
 }
+
+.shade-vertex {
+    fill: var(--pico-primary);
+    stroke: var(--pico-card-background-color);
+    stroke-width: 0.05;
+    cursor: grab;
+}
+
+.shade-draft-path {
+    fill: rgba(0, 0, 0, 0.15);
+    stroke: var(--pico-primary);
+    stroke-width: 0.1;
+    stroke-dasharray: 0.3, 0.2;
+}
+
+.shade-draw-status {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    margin-bottom: 1rem;
+    padding: 0.5rem 0.75rem;
+    background-color: var(--pico-primary-background);
+    border: 1px solid var(--pico-primary);
+    border-radius: var(--pico-border-radius);
+}
+
+.shade-draw-status button {
+    width: auto;
+    margin: 0;
+    padding: 0.25rem 0.75rem;
+}
+
+.shade-draw-button.armed {
+    outline: 2px solid var(--pico-primary);
+}
+
+.shade-source-item {
+    border: 1px solid var(--pico-muted-border-color);
+    border-radius: var(--pico-border-radius);
+    padding: 0.5rem;
+    margin-bottom: 0.5rem;
+}
+
+.shade-source-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+}
+
+.shade-source-header form {
+    margin: 0;
+}
+
+.shade-combo-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+    font-size: 0.85rem;
+    padding: 0.15rem 0;
+}
+
+.shade-combo-row button {
+    padding: 0.15rem 0.5rem;
+    font-size: 0.8rem;
+    width: auto;
+}
+
+.shade-cell {
+    pointer-events: none;
+}
+
+.shade-cell.partial_shade {
+    fill: #000000;
+    fill-opacity: 0.15;
+}
+
+.shade-cell.full_shade {
+    fill: #000000;
+    fill-opacity: 0.35;
+}
+
+.planting-dot.shade-warning,
+.lattice-point.shade-warning {
+    stroke: #f0ad4e;
+    stroke-width: 0.6;
+    stroke-dasharray: 0.5, 0.3;
+}

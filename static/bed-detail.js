@@ -14,6 +14,8 @@
     var planted_layer = document.getElementById("planted-layer");
     var lattice_layer = document.getElementById("lattice-layer");
     var staged_layer = document.getElementById("staged-layer");
+    var shade_layer = document.getElementById("shade-layer");
+    var shade_date_input = document.getElementById("shade-date");
     var palette_seed = document.getElementById("palette-seed");
     var palette_transplant = document.getElementById("palette-transplant");
     var mode_seed_radio = document.getElementById("mode-seed");
@@ -22,6 +24,7 @@
     var batch_variety_id_input = document.getElementById("batch-variety-id");
     var batch_source_type_input = document.getElementById("batch-source-type");
     var batch_points_input = document.getElementById("batch-points");
+    var batch_planted_date_input = document.getElementById("batch-planted-date");
     var batch_staged_count = document.getElementById("batch-staged-count");
     var lot_select = document.getElementById("batch-transplant-lot-select");
     var lot_quantity_wrap = document.getElementById("armed-lot-quantity-wrap");
@@ -197,6 +200,70 @@
         sync_lot_quantity_input();
     }
 
+    function render_shade_grid(grid) {
+        clear_children(shade_layer);
+        if (!grid) return;
+        for (var row = 0; row < grid.rows; row++) {
+            for (var col = 0; col < grid.cols; col++) {
+                var shade = grid.cells[row][col];
+                if (shade === "full_sun") continue;
+                var rect = document.createElementNS(SVG_NS, "rect");
+                rect.setAttribute("x", col * 12);
+                rect.setAttribute("y", row * 12);
+                rect.setAttribute("width", 12);
+                rect.setAttribute("height", 12);
+                rect.setAttribute("class", "shade-cell " + shade);
+                shade_layer.appendChild(rect);
+            }
+        }
+    }
+
+    function fetch_shade_grid() {
+        if (!shade_layer) return;
+        var on_date = shade_date_input ? shade_date_input.value : "";
+        fetch("/beds/" + data.bed_id + "/shade-grid?on_date=" + encodeURIComponent(on_date))
+            .then(function (response) {
+                return response.ok ? response.json() : null;
+            })
+            .then(function (grid) {
+                if (grid) render_shade_grid(grid);
+            });
+    }
+
+    function collect_shade_check_points() {
+        var points = [];
+        var els = [];
+        [lattice_layer, staged_layer].forEach(function (layer) {
+            var circles = layer.querySelectorAll("circle");
+            for (var i = 0; i < circles.length; i++) {
+                var circle = circles[i];
+                points.push({ x_in: parseFloat(circle.getAttribute("cx")), y_in: parseFloat(circle.getAttribute("cy")) });
+                els.push(circle);
+            }
+        });
+        return { points: points, els: els };
+    }
+
+    function fetch_shade_warnings() {
+        if (!state.armed_variety || !batch_planted_date_input || !batch_planted_date_input.value) return;
+        var collected = collect_shade_check_points();
+        if (!collected.points.length) return;
+        post("/beds/" + data.bed_id + "/shade-warnings", {
+            variety_id: String(state.armed_variety.id),
+            planted_date: batch_planted_date_input.value,
+            points: JSON.stringify(collected.points),
+        })
+            .then(function (response) {
+                return response.ok ? response.json() : null;
+            })
+            .then(function (result) {
+                if (!result) return;
+                collected.els.forEach(function (el, i) {
+                    el.classList.toggle("shade-warning", !!result.warnings[i]);
+                });
+            });
+    }
+
     function render_lattice() {
         clear_children(lattice_layer);
         clear_children(staged_layer);
@@ -226,6 +293,7 @@
         }
         update_companion_tints();
         update_batch_form();
+        fetch_shade_warnings();
     }
 
     function highlight_armed_button(variety_id, mode) {
@@ -335,4 +403,12 @@
             batch_points_input.value = JSON.stringify(state.staged_points);
         });
     }
+
+    if (shade_date_input) {
+        shade_date_input.addEventListener("change", fetch_shade_grid);
+    }
+    if (batch_planted_date_input) {
+        batch_planted_date_input.addEventListener("change", fetch_shade_warnings);
+    }
+    fetch_shade_grid();
 })();

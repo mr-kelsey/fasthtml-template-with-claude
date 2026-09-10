@@ -978,6 +978,136 @@ def test_delete_bed_redirects_to_plot_map(client):
     assert response.headers["location"] == f"/land-plots/{plot_id}/map"
 
 
+def _create_shade_source(client, plot_id, label="Oak tree"):
+    client.post(f"/land-plots/{plot_id}/shade-sources", data={"label": label})
+    return db.list_shade_sources_for_plot(plot_id)[0]["id"]
+
+
+def test_add_shade_source_redirects_with_303(client):
+    plot_id = _create_plot(client)
+    response = client.post(f"/land-plots/{plot_id}/shade-sources", data={"label": "Oak tree"}, follow_redirects=False)
+    assert response.status_code == 303
+
+
+def test_add_shade_source_appears_on_map_page(client):
+    plot_id = _create_plot(client)
+    client.post(f"/land-plots/{plot_id}/shade-sources", data={"label": "Oak tree"})
+    response = client.get(f"/land-plots/{plot_id}/map")
+    assert "Oak tree" in response.text
+
+
+def test_add_shade_source_rejects_blank_label(client):
+    plot_id = _create_plot(client)
+    response = client.post(f"/land-plots/{plot_id}/shade-sources", data={"label": ""})
+    assert response.status_code == 422
+
+
+def test_add_shade_source_returns_404_when_plot_not_found(client):
+    response = client.post("/land-plots/999999/shade-sources", data={"label": "Oak tree"})
+    assert response.status_code == 404
+
+
+def test_delete_shade_source_removes_it(client):
+    plot_id = _create_plot(client)
+    source_id = _create_shade_source(client, plot_id)
+    client.post(f"/shade-sources/{source_id}/delete")
+    assert db.list_shade_sources_for_plot(plot_id) == []
+
+
+def test_delete_shade_source_redirects_to_plot_map(client):
+    plot_id = _create_plot(client)
+    source_id = _create_shade_source(client, plot_id)
+    response = client.post(f"/shade-sources/{source_id}/delete", follow_redirects=False)
+    assert response.headers["location"] == f"/land-plots/{plot_id}/map"
+
+
+def test_save_shade_polygon_returns_200(client):
+    plot_id = _create_plot(client)
+    source_id = _create_shade_source(client, plot_id)
+    response = client.post(
+        f"/shade-sources/{source_id}/polygons",
+        data={"season": "summer_solstice", "shade_type": "full", "points": json.dumps([[0, 0], [0, 1], [1, 1]])},
+    )
+    assert response.status_code == 200
+
+
+def test_save_shade_polygon_persists(client):
+    plot_id = _create_plot(client)
+    source_id = _create_shade_source(client, plot_id)
+    client.post(
+        f"/shade-sources/{source_id}/polygons",
+        data={"season": "summer_solstice", "shade_type": "full", "points": json.dumps([[0, 0], [0, 1], [1, 1]])},
+    )
+    assert len(db.list_shade_polygons_for_source(source_id)) == 1
+
+
+def test_save_shade_polygon_rejects_invalid_season(client):
+    plot_id = _create_plot(client)
+    source_id = _create_shade_source(client, plot_id)
+    response = client.post(
+        f"/shade-sources/{source_id}/polygons",
+        data={"season": "autumn", "shade_type": "full", "points": json.dumps([[0, 0], [0, 1], [1, 1]])},
+    )
+    assert response.status_code == 422
+
+
+def test_save_shade_polygon_rejects_invalid_shade_type(client):
+    plot_id = _create_plot(client)
+    source_id = _create_shade_source(client, plot_id)
+    response = client.post(
+        f"/shade-sources/{source_id}/polygons",
+        data={"season": "summer_solstice", "shade_type": "dim", "points": json.dumps([[0, 0], [0, 1], [1, 1]])},
+    )
+    assert response.status_code == 422
+
+
+def test_save_shade_polygon_rejects_fewer_than_three_points(client):
+    plot_id = _create_plot(client)
+    source_id = _create_shade_source(client, plot_id)
+    response = client.post(
+        f"/shade-sources/{source_id}/polygons",
+        data={"season": "summer_solstice", "shade_type": "full", "points": json.dumps([[0, 0], [0, 1]])},
+    )
+    assert response.status_code == 422
+
+
+def test_save_shade_polygon_returns_404_when_source_not_found(client):
+    response = client.post(
+        "/shade-sources/999999/polygons",
+        data={"season": "summer_solstice", "shade_type": "full", "points": json.dumps([[0, 0], [0, 1], [1, 1]])},
+    )
+    assert response.status_code == 404
+
+
+def test_delete_shade_polygon_returns_204(client):
+    plot_id = _create_plot(client)
+    source_id = _create_shade_source(client, plot_id)
+    save_response = client.post(
+        f"/shade-sources/{source_id}/polygons",
+        data={"season": "summer_solstice", "shade_type": "full", "points": json.dumps([[0, 0], [0, 1], [1, 1]])},
+    )
+    polygon_id = save_response.json()["id"]
+    response = client.post(f"/shade-polygons/{polygon_id}/delete")
+    assert response.status_code == 204
+
+
+def test_delete_shade_polygon_removes_it(client):
+    plot_id = _create_plot(client)
+    source_id = _create_shade_source(client, plot_id)
+    save_response = client.post(
+        f"/shade-sources/{source_id}/polygons",
+        data={"season": "summer_solstice", "shade_type": "full", "points": json.dumps([[0, 0], [0, 1], [1, 1]])},
+    )
+    polygon_id = save_response.json()["id"]
+    client.post(f"/shade-polygons/{polygon_id}/delete")
+    assert db.list_shade_polygons_for_source(source_id) == []
+
+
+def test_delete_shade_polygon_returns_404_when_not_found(client):
+    response = client.post("/shade-polygons/999999/delete")
+    assert response.status_code == 404
+
+
 def test_bed_detail_page_returns_200(client):
     plot_id = _create_plot(client)
     bed_id = _create_bed(client, plot_id)
@@ -1520,3 +1650,81 @@ def test_delete_product_reminder_event_is_forbidden(client):
     event_id = db.list_farm_events_in_range("2000-01-01", "2100-01-01")[0]["id"]
     response = client.post(f"/farm-calendar/{event_id}/delete")
     assert response.status_code == 403
+
+
+def test_bed_shade_grid_returns_200(client):
+    plot_id = _create_plot(client)
+    bed_id = _create_bed(client, plot_id)
+    response = client.get(f"/beds/{bed_id}/shade-grid")
+    assert response.status_code == 200
+
+
+def test_bed_shade_grid_returns_404_when_bed_not_found(client):
+    response = client.get("/beds/999999/shade-grid")
+    assert response.status_code == 404
+
+
+def test_bed_shade_grid_shape_matches_bed_dimensions(client):
+    plot_id = _create_plot(client)
+    bed_id = _create_bed(client, plot_id, width_ft="4", length_ft="8")
+    body = client.get(f"/beds/{bed_id}/shade-grid").json()
+    assert (body["cols"], body["rows"], len(body["cells"]), len(body["cells"][0])) == (4, 8, 8, 4)
+
+
+def test_bed_shade_grid_defaults_to_full_sun_with_no_shade_sources(client):
+    plot_id = _create_plot(client)
+    bed_id = _create_bed(client, plot_id, width_ft="2", length_ft="2")
+    body = client.get(f"/beds/{bed_id}/shade-grid?on_date=2026-06-15").json()
+    assert all(cell == "full_sun" for row in body["cells"] for cell in row)
+
+
+def test_bed_shade_warnings_returns_404_when_bed_not_found(client):
+    variety_id = _create_variety(client)
+    response = client.post(
+        "/beds/999999/shade-warnings",
+        data={"variety_id": str(variety_id), "planted_date": "2026-06-01", "points": json.dumps([{"x_in": 0, "y_in": 0}])},
+    )
+    assert response.status_code == 404
+
+
+def test_bed_shade_warnings_false_with_no_shade_sources(client):
+    plot_id = _create_plot(client)
+    bed_id = _create_bed(client, plot_id)
+    client.post(f"/beds/{bed_id}/position", data={"x": "0", "y": "0"})
+    variety_id = _create_variety(
+        client, sun_needs="full_sun", days_to_maturity_min="1", days_to_maturity_max="5"
+    )
+    response = client.post(
+        f"/beds/{bed_id}/shade-warnings",
+        data={
+            "variety_id": str(variety_id), "planted_date": "2026-06-01",
+            "points": json.dumps([{"x_in": 0, "y_in": 0}]),
+        },
+    )
+    assert response.json()["warnings"] == [False]
+
+
+def test_bed_shade_warnings_true_when_bed_fully_shaded_for_a_full_sun_variety(client):
+    plot_id = _create_plot(client)
+    bed_id = _create_bed(client, plot_id)
+    client.post(f"/beds/{bed_id}/position", data={"x": "0", "y": "0"})
+    client.post(f"/land-plots/{plot_id}/shade-sources", data={"label": "Oak tree"})
+    source_id = db.list_shade_sources_for_plot(plot_id)[0]["id"]
+    client.post(
+        f"/shade-sources/{source_id}/polygons",
+        data={
+            "season": "summer_solstice", "shade_type": "full",
+            "points": json.dumps([[-10, -10], [-10, 10], [10, 10], [10, -10]]),
+        },
+    )
+    variety_id = _create_variety(
+        client, sun_needs="full_sun", days_to_maturity_min="1", days_to_maturity_max="5"
+    )
+    response = client.post(
+        f"/beds/{bed_id}/shade-warnings",
+        data={
+            "variety_id": str(variety_id), "planted_date": "2026-06-01",
+            "points": json.dumps([{"x_in": 0, "y_in": 0}]),
+        },
+    )
+    assert response.json()["warnings"] == [True]

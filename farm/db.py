@@ -167,6 +167,25 @@ SCHEMA_STATEMENTS = [
         created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
     )
     """,
+    """
+    CREATE TABLE IF NOT EXISTS shade_sources (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        plot_id INTEGER NOT NULL,
+        label TEXT NOT NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS shade_polygons (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        shade_source_id INTEGER NOT NULL,
+        season TEXT NOT NULL CHECK (season IN ('summer_solstice', 'winter_solstice')),
+        shade_type TEXT NOT NULL CHECK (shade_type IN ('full', 'partial')),
+        points TEXT NOT NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE (shade_source_id, season, shade_type)
+    )
+    """,
 ]
 
 _AGRONOMIC_COLUMNS = (
@@ -213,6 +232,10 @@ _GARDEN_PRODUCT_COLUMNS = (
 _PRODUCT_APPLICATION_COLUMNS = (
     "id, product_id, applied_date, bed_id, location, amount, unit, notes, created_at"
 )
+
+_SHADE_SOURCE_COLUMNS = "id, plot_id, label, created_at"
+
+_SHADE_POLYGON_COLUMNS = "id, shade_source_id, season, shade_type, points, created_at"
 
 _FARM_EVENT_COLUMNS = (
     "fe.id, fe.event_type, fe.title, fe.start_date, fe.end_date, fe.notes, "
@@ -1326,3 +1349,84 @@ class FarmDatabaseMixin:
                 text("DELETE FROM farm_events WHERE linked_product_application_id = :id"), {"id": application_id}
             )
             db_connection.execute(text("DELETE FROM product_applications WHERE id = :id"), {"id": application_id})
+
+    def list_shade_sources_for_plot(self, plot_id: int):
+        with self.engine.connect() as db_connection:
+            return db_connection.execute(
+                text(f"SELECT {_SHADE_SOURCE_COLUMNS} FROM shade_sources WHERE plot_id = :plot_id ORDER BY label"),
+                {"plot_id": plot_id},
+            ).mappings().all()
+
+    def get_shade_source(self, source_id: int):
+        with self.engine.connect() as db_connection:
+            return db_connection.execute(
+                text(f"SELECT {_SHADE_SOURCE_COLUMNS} FROM shade_sources WHERE id = :id"), {"id": source_id}
+            ).mappings().first()
+
+    def add_shade_source(self, plot_id: int, label: str):
+        with self.engine.begin() as db_connection:
+            db_connection.execute(
+                text("INSERT INTO shade_sources (plot_id, label) VALUES (:plot_id, :label)"),
+                {"plot_id": plot_id, "label": label},
+            )
+
+    def delete_shade_source(self, source_id: int):
+        "Deletes the source's polygons and the source itself in one transaction -- there's no FK ON DELETE CASCADE."
+        with self.engine.begin() as db_connection:
+            db_connection.execute(
+                text("DELETE FROM shade_polygons WHERE shade_source_id = :id"), {"id": source_id}
+            )
+            db_connection.execute(text("DELETE FROM shade_sources WHERE id = :id"), {"id": source_id})
+
+    def list_shade_polygons_for_source(self, source_id: int):
+        with self.engine.connect() as db_connection:
+            return db_connection.execute(
+                text(
+                    f"SELECT {_SHADE_POLYGON_COLUMNS} FROM shade_polygons WHERE shade_source_id = :id "
+                    "ORDER BY season, shade_type"
+                ),
+                {"id": source_id},
+            ).mappings().all()
+
+    def list_shade_polygons_for_plot(self, plot_id: int):
+        "Every polygon across every shade source on a plot -- what the classifier and the map's data blob both need."
+        with self.engine.connect() as db_connection:
+            return db_connection.execute(
+                text(
+                    "SELECT sp.id, sp.shade_source_id, sp.season, sp.shade_type, sp.points, sp.created_at, "
+                    "ss.label AS source_label "
+                    "FROM shade_polygons sp JOIN shade_sources ss ON ss.id = sp.shade_source_id "
+                    "WHERE ss.plot_id = :plot_id"
+                ),
+                {"plot_id": plot_id},
+            ).mappings().all()
+
+    def get_shade_polygon(self, polygon_id: int):
+        with self.engine.connect() as db_connection:
+            return db_connection.execute(
+                text(f"SELECT {_SHADE_POLYGON_COLUMNS} FROM shade_polygons WHERE id = :id"), {"id": polygon_id}
+            ).mappings().first()
+
+    def save_shade_polygon(self, shade_source_id: int, season: str, shade_type: str, points: str):
+        """Upserts by the (shade_source_id, season, shade_type) unique key -- a source has at most one
+        polygon per combo (up to 4: full/partial x summer/winter). Returns the polygon's id."""
+        with self.engine.begin() as db_connection:
+            db_connection.execute(
+                text(
+                    "INSERT INTO shade_polygons (shade_source_id, season, shade_type, points) "
+                    "VALUES (:shade_source_id, :season, :shade_type, :points) "
+                    "ON CONFLICT (shade_source_id, season, shade_type) DO UPDATE SET points = excluded.points"
+                ),
+                {"shade_source_id": shade_source_id, "season": season, "shade_type": shade_type, "points": points},
+            )
+            return db_connection.execute(
+                text(
+                    "SELECT id FROM shade_polygons WHERE shade_source_id = :shade_source_id "
+                    "AND season = :season AND shade_type = :shade_type"
+                ),
+                {"shade_source_id": shade_source_id, "season": season, "shade_type": shade_type},
+            ).scalar_one()
+
+    def delete_shade_polygon(self, polygon_id: int):
+        with self.engine.begin() as db_connection:
+            db_connection.execute(text("DELETE FROM shade_polygons WHERE id = :id"), {"id": polygon_id})

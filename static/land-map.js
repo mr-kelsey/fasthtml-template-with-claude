@@ -204,6 +204,7 @@
     }
 
     svg.addEventListener("pointerdown", function (e) {
+        if (drawState.active) return; // bed drag/resize is disabled while drawing/editing a shade polygon
         var group = e.target.closest(".bed-group");
         if (!group) return;
         var handle = e.target.closest(".resize-handle");
@@ -230,4 +231,284 @@
         },
         true
     );
+
+    // -- Phase 9: shade-source polygon drawing/editing -------------------------------------
+    // Deliberately additive to the drag/resize code above rather than reworked into it -- this
+    // is a distinct gesture (click-to-add-vertex / drag-a-vertex) over the same SVG canvas and
+    // the same toFeet() helper, not another instance of the bed drag pattern.
+
+    var shadeDataEl = document.getElementById("shade-map-data");
+    var shadeDrawLayer = document.getElementById("shade-draw-layer");
+    var shadeDrawStatus = document.getElementById("shade-draw-status");
+    var shadeData = shadeDataEl ? JSON.parse(shadeDataEl.textContent) : null;
+
+    var CLOSE_THRESHOLD_FT = 0.75;
+    var VERTEX_RADIUS_FT = 0.35;
+    var SVG_NS = "http://www.w3.org/2000/svg";
+
+    // Kept in sync with SEASON_LABELS/SHADE_TYPE_LABELS in farm/pages/land_plots.py, same
+    // duplication pattern as LABEL_FONT_RATIO etc. above.
+    var SEASON_LABELS = { summer_solstice: "Summer solstice", winter_solstice: "Winter solstice" };
+    var SHADE_TYPE_LABELS = { full: "Full shade", partial: "Partial shade" };
+
+    var drawState = {
+        active: false,
+        sourceId: null,
+        season: null,
+        shadeType: null,
+        points: [], // [{x, y}]
+        editingExisting: false,
+    };
+
+    function shadeComboKey(season, shadeType) {
+        return season + ":" + shadeType;
+    }
+
+    function shadeSourceLabel(sourceId) {
+        var source = shadeData.shade_sources.filter(function (s) { return s.id === sourceId; })[0];
+        return source ? source.label : "";
+    }
+
+    function highlightDrawButtons() {
+        document.querySelectorAll(".shade-draw-button").forEach(function (button) {
+            var matches =
+                drawState.active &&
+                parseInt(button.getAttribute("data-source-id"), 10) === drawState.sourceId &&
+                button.getAttribute("data-season") === drawState.season &&
+                button.getAttribute("data-shade-type") === drawState.shadeType;
+            button.classList.toggle("armed", matches);
+        });
+    }
+
+    function updateDrawStatus() {
+        if (!shadeDrawStatus) return;
+        while (shadeDrawStatus.firstChild) shadeDrawStatus.removeChild(shadeDrawStatus.firstChild);
+        if (!drawState.active) {
+            shadeDrawStatus.hidden = true;
+            return;
+        }
+        shadeDrawStatus.hidden = false;
+        var comboLabel =
+            shadeSourceLabel(drawState.sourceId) + " — " +
+            SEASON_LABELS[drawState.season] + " / " + SHADE_TYPE_LABELS[drawState.shadeType];
+        var text = document.createElement("span");
+        text.textContent = drawState.editingExisting
+            ? "Editing " + comboLabel + ". Drag a point on the map to move it, or click Done to go back " +
+                "to clicking beds."
+            : "Drawing " + comboLabel + ". Click the map to place points (at least 3), " +
+                "then click near the first point to close the shape.";
+        // "Cancel" only while a fresh (unsaved) shape is still being placed -- there's nothing
+        // to lose yet. Once it's closed (editingExisting), every change is already saved on
+        // each vertex drop, so exiting is a plain "Done", not a discard.
+        var exitButton = document.createElement("button");
+        exitButton.type = "button";
+        exitButton.textContent = drawState.editingExisting ? "Done" : "Cancel";
+        exitButton.addEventListener("click", endDraw);
+        shadeDrawStatus.appendChild(text);
+        shadeDrawStatus.appendChild(exitButton);
+    }
+
+    // toFeet() above is a per-axis pixel stretch, not the true (letterboxed, aspect-preserving)
+    // render scale -- see _js_naive_scale's comment in tests/farm/test_land_map_js.py. That's
+    // invisible for bed drag/resize, which only ever consume toFeet() *deltas* (the distortion
+    // cancels out of a subtraction). Freehand polygon points are placed absolutely, though, so
+    // they need the real inverse of the browser's own rendering transform or they'd land
+    // visibly off from the click on any plot whose aspect ratio isn't 1:1.
+    function toFeetTrue(clientX, clientY) {
+        var rect = svg.getBoundingClientRect();
+        var viewBox = svg.viewBox.baseVal;
+        var scale = Math.min(rect.width / viewBox.width, rect.height / viewBox.height);
+        var offsetX = rect.left + (rect.width - viewBox.width * scale) / 2;
+        var offsetY = rect.top + (rect.height - viewBox.height * scale) / 2;
+        return { x: (clientX - offsetX) / scale, y: (clientY - offsetY) / scale };
+    }
+
+    function makeSvgEl(tag, attrs) {
+        var el = document.createElementNS(SVG_NS, tag);
+        for (var key in attrs) el.setAttribute(key, attrs[key]);
+        return el;
+    }
+
+    function clearShadeDrawLayer() {
+        while (shadeDrawLayer.firstChild) shadeDrawLayer.removeChild(shadeDrawLayer.firstChild);
+    }
+
+    function draftPathD() {
+        var pts = drawState.points;
+        var d = "M " + pts.map(function (p) { return p.x + "," + p.y; }).join(" L ");
+        if (drawState.editingExisting && pts.length > 2) d += " Z";
+        return d;
+    }
+
+    function startVertexDrag(index, handle, downEvent) {
+        var pathEl = shadeDrawLayer.querySelector(".shade-draft-path");
+        var origin = drawState.points[index];
+        var startFeet = toFeetTrue(downEvent.clientX, downEvent.clientY);
+        handle.setPointerCapture(downEvent.pointerId);
+
+        function onMove(e) {
+            var nowFeet = toFeetTrue(e.clientX, e.clientY);
+            var pt = { x: origin.x + (nowFeet.x - startFeet.x), y: origin.y + (nowFeet.y - startFeet.y) };
+            drawState.points[index] = pt;
+            handle.setAttribute("cx", pt.x);
+            handle.setAttribute("cy", pt.y);
+            if (pathEl) pathEl.setAttribute("d", draftPathD());
+        }
+
+        function cleanup(e) {
+            handle.releasePointerCapture(e.pointerId);
+            handle.removeEventListener("pointermove", onMove);
+            handle.removeEventListener("pointerup", onUp);
+            handle.removeEventListener("pointercancel", cleanup);
+        }
+
+        function onUp(e) {
+            cleanup(e);
+            saveDraft();
+        }
+
+        handle.addEventListener("pointermove", onMove);
+        handle.addEventListener("pointerup", onUp);
+        handle.addEventListener("pointercancel", cleanup);
+    }
+
+    function renderDraft() {
+        if (!shadeDrawLayer) return;
+        // A bed group's onclick navigates to its detail page (pages/land_plots.py's _bed_group) --
+        // guarded on this flag so clicking a bed to place/drag a shade-polygon vertex over it
+        // doesn't navigate away instead. pointerdown-based bed drag/resize is separately disabled
+        // by the `if (drawState.active) return;` guard in the pointerdown listener below.
+        window.__shadeDrawActive = drawState.active;
+        updateDrawStatus();
+        highlightDrawButtons();
+        clearShadeDrawLayer();
+        if (!drawState.active) return;
+        var pts = drawState.points;
+        if (pts.length > 1) {
+            shadeDrawLayer.appendChild(makeSvgEl("path", { d: draftPathD(), class: "shade-draft-path" }));
+        }
+        pts.forEach(function (point, index) {
+            var handle = makeSvgEl("circle", { cx: point.x, cy: point.y, r: VERTEX_RADIUS_FT, class: "shade-vertex" });
+            if (drawState.editingExisting) {
+                handle.addEventListener("pointerdown", function (e) {
+                    e.stopPropagation();
+                    startVertexDrag(index, handle, e);
+                });
+            }
+            shadeDrawLayer.appendChild(handle);
+        });
+    }
+
+    function updateShadeSourceRow(sourceId, season, shadeType, polygonId) {
+        var item = document.querySelector('.shade-source-item[data-source-id="' + sourceId + '"]');
+        if (!item) return;
+        var row = item.querySelector(
+            '.shade-combo-row[data-season="' + season + '"][data-shade-type="' + shadeType + '"]'
+        );
+        if (!row) return;
+        row.querySelector(".shade-draw-button").textContent = "Edit";
+        var deleteButton = row.querySelector(".shade-delete-polygon-button");
+        deleteButton.hidden = false;
+        deleteButton.setAttribute("data-polygon-id", polygonId);
+        var source = shadeData.shade_sources.filter(function (s) { return s.id === sourceId; })[0];
+        if (source) source.polygons[shadeComboKey(season, shadeType)] = { id: polygonId, points: drawState.points.map(function (p) { return [p.x, p.y]; }) };
+    }
+
+    function resetShadeSourceRow(sourceId, season, shadeType) {
+        var item = document.querySelector('.shade-source-item[data-source-id="' + sourceId + '"]');
+        if (!item) return;
+        var row = item.querySelector(
+            '.shade-combo-row[data-season="' + season + '"][data-shade-type="' + shadeType + '"]'
+        );
+        if (!row) return;
+        row.querySelector(".shade-draw-button").textContent = "Draw";
+        var deleteButton = row.querySelector(".shade-delete-polygon-button");
+        deleteButton.hidden = true;
+        deleteButton.removeAttribute("data-polygon-id");
+        var source = shadeData.shade_sources.filter(function (s) { return s.id === sourceId; })[0];
+        if (source) source.polygons[shadeComboKey(season, shadeType)] = null;
+    }
+
+    function saveDraft() {
+        if (drawState.points.length < 3) return;
+        post("/shade-sources/" + drawState.sourceId + "/polygons", {
+            season: drawState.season,
+            shade_type: drawState.shadeType,
+            points: JSON.stringify(drawState.points.map(function (p) { return [p.x, p.y]; })),
+        })
+            .then(function (response) {
+                return response.ok ? response.json() : null;
+            })
+            .then(function (result) {
+                if (!result) return;
+                updateShadeSourceRow(drawState.sourceId, drawState.season, drawState.shadeType, result.id);
+            });
+    }
+
+    function closeDraft() {
+        drawState.editingExisting = true;
+        renderDraft();
+        saveDraft();
+    }
+
+    function endDraw() {
+        drawState.active = false;
+        drawState.sourceId = null;
+        drawState.season = null;
+        drawState.shadeType = null;
+        drawState.points = [];
+        drawState.editingExisting = false;
+        renderDraft();
+    }
+
+    if (shadeDrawLayer && shadeData) {
+        document.addEventListener("click", function (e) {
+            var drawButton = e.target.closest(".shade-draw-button");
+            if (drawButton) {
+                var sourceId = parseInt(drawButton.getAttribute("data-source-id"), 10);
+                var season = drawButton.getAttribute("data-season");
+                var shadeType = drawButton.getAttribute("data-shade-type");
+                var source = shadeData.shade_sources.filter(function (s) { return s.id === sourceId; })[0];
+                var existing = source ? source.polygons[shadeComboKey(season, shadeType)] : null;
+                drawState.active = true;
+                drawState.sourceId = sourceId;
+                drawState.season = season;
+                drawState.shadeType = shadeType;
+                drawState.editingExisting = !!existing;
+                drawState.points = existing ? existing.points.map(function (p) { return { x: p[0], y: p[1] }; }) : [];
+                renderDraft();
+                return;
+            }
+            var deleteButton = e.target.closest(".shade-delete-polygon-button");
+            if (deleteButton) {
+                var polygonId = deleteButton.getAttribute("data-polygon-id");
+                if (!polygonId) return;
+                var row = deleteButton.closest(".shade-combo-row");
+                var item = deleteButton.closest(".shade-source-item");
+                post("/shade-polygons/" + polygonId + "/delete", {}).then(function (response) {
+                    if (!response.ok) return;
+                    resetShadeSourceRow(parseInt(item.getAttribute("data-source-id"), 10), row.getAttribute("data-season"), row.getAttribute("data-shade-type"));
+                    if (drawState.sourceId === parseInt(item.getAttribute("data-source-id"), 10) && drawState.season === row.getAttribute("data-season") && drawState.shadeType === row.getAttribute("data-shade-type")) {
+                        endDraw();
+                    }
+                });
+            }
+        });
+
+        svg.addEventListener("click", function (e) {
+            if (!drawState.active || drawState.editingExisting) return;
+            var point = toFeetTrue(e.clientX, e.clientY);
+            if (drawState.points.length >= 3) {
+                var first = drawState.points[0];
+                var dx = point.x - first.x;
+                var dy = point.y - first.y;
+                if (Math.sqrt(dx * dx + dy * dy) < CLOSE_THRESHOLD_FT) {
+                    closeDraft();
+                    return;
+                }
+            }
+            drawState.points.push(point);
+            renderDraft();
+        });
+    }
 })();
