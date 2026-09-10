@@ -124,9 +124,15 @@ def _variety_form(action, submit_label, variety=None, default_color_hex=None):
 
 def _variety_row(variety):
     return fast.Tr(
-        fast.Td(fast.Span(cls="variety-swatch", style=f"background-color:{variety['color_hex'] or '#888888'}")),
-        fast.Td(variety["name"]),
-        fast.Td(variety["common_name"]),
+        fast.Td(
+            fast.Div(
+                fast.Span(cls="variety-swatch", style=f"background-color:{variety['color_hex'] or '#888888'}"),
+                variety["common_name"],
+                cls="variety-identity-name",
+            ),
+            fast.Div(variety["name"], cls="variety-identity-subtitle"),
+            cls="sticky-col-left",
+        ),
         fast.Td(variety["plant_family"]),
         fast.Td(variety["genus"] or ""),
         fast.Td(variety["species"] or ""),
@@ -150,6 +156,7 @@ def _variety_row(variety):
                 method="post",
                 action=f"/seed-varieties/{variety['id']}/delete",
             ),
+            cls="sticky-col",
         ),
     )
 
@@ -190,7 +197,7 @@ def _companion_rule_row(rule):
 def list_seed_varieties_page():
     varieties = db.list_seed_varieties()
     headers = [
-        "Color", "Variety", "Common Name", "Family", "Genus", "Species",
+        "Variety", "Family", "Genus", "Species",
         "Germination (days)", "Maturity (days)", "Spacing (in)", "Sun", "Water",
         "Soil", "pH Min", "pH Max", "Feed Freq (days)", "Growth N-P-K", "Produce N-P-K", "",
     ]
@@ -199,9 +206,21 @@ def list_seed_varieties_page():
         if varieties
         else [fast.Tr(fast.Td("No seed varieties yet.", colspan=str(len(headers))))]
     )
-    table = fast.Table(
-        fast.Thead(fast.Tr(*[fast.Th(h) for h in headers])),
-        fast.Tbody(*rows),
+
+    def _header_cls(i):
+        if i == 0:
+            return "sticky-col-left"
+        if i == len(headers) - 1:
+            return "sticky-col"
+        return None
+
+    header_cells = [fast.Th(h, cls=_header_cls(i)) for i, h in enumerate(headers)]
+    table = fast.Div(
+        fast.Table(
+            fast.Thead(fast.Tr(*header_cells)),
+            fast.Tbody(*rows),
+        ),
+        cls="table-scroll",
     )
     rules = db.list_companion_rules()
     rule_headers = ["Plant A", "Plant B", "Relation", "Notes", ""]

@@ -11,6 +11,38 @@ table form {
     margin: 0;
 }
 
+.table-scroll {
+    overflow-x: auto;
+}
+
+.sticky-col {
+    position: sticky;
+    right: 0;
+    background-color: var(--pico-background-color);
+    box-shadow: -1px 0 0 var(--pico-muted-border-color);
+    white-space: nowrap;
+}
+
+.sticky-col-left {
+    position: sticky;
+    left: 0;
+    background-color: var(--pico-background-color);
+    box-shadow: 1px 0 0 var(--pico-muted-border-color);
+    white-space: nowrap;
+}
+
+.variety-identity-name {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-weight: bold;
+}
+
+.variety-identity-subtitle {
+    color: var(--pico-muted-color);
+    font-size: 0.85rem;
+}
+
 .month-nav {
     display: flex;
     align-items: center;
