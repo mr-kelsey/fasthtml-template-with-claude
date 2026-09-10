@@ -711,6 +711,21 @@ def test_add_planting_skips_harvest_event_when_variety_lacks_maturity_days():
     assert [e["event_type"] for e in db.list_farm_events_in_range(*ALL_TIME)] == ["germination-check"]
 
 
+def test_transplant_planting_skips_germination_check_event():
+    "Phase 7: a transplant already germinated elsewhere (or was purchased) -- nothing to check on-site."
+    variety_id = _add_variety(
+        germination_days_min=5, germination_days_max=10, days_to_maturity_min=60, days_to_maturity_max=70
+    )
+    db.add_planting(variety_id, "2026-05-01", source_type="transplant")
+    assert [e["event_type"] for e in db.list_farm_events_in_range(*ALL_TIME)] == ["harvest"]
+
+
+def test_seed_planting_still_generates_germination_check_event():
+    variety_id = _add_variety(germination_days_min=5, germination_days_max=10)
+    db.add_planting(variety_id, "2026-05-01", source_type="seed")
+    assert [e["event_type"] for e in db.list_farm_events_in_range(*ALL_TIME)] == ["germination-check"]
+
+
 def test_update_planting_regenerates_events_instead_of_duplicating():
     variety_id = _add_variety(days_to_maturity_min=60, days_to_maturity_max=70)
     planting_id = db.add_planting(variety_id, "2026-05-01")
@@ -727,6 +742,34 @@ def test_update_planting_shifts_generated_event_dates():
     assert (harvest["start_date"], harvest["end_date"]) == (
         (planted + timedelta(days=60)).isoformat(), (planted + timedelta(days=70)).isoformat(),
     )
+
+
+def test_update_planting_changing_variety_clears_old_groups_now_empty_event():
+    variety_a = _add_variety(
+        common_name="Tomato", variety_name="Cherokee Purple", days_to_maturity_min=60, days_to_maturity_max=70
+    )
+    variety_b = _add_variety(
+        common_name="Pepper", variety_name="Bell", days_to_maturity_min=60, days_to_maturity_max=70
+    )
+    planting_id = db.add_planting(variety_a, "2026-05-01")
+    db.update_planting(planting_id, variety_b, "2026-05-01")
+    events = db.list_farm_events_in_range(*ALL_TIME)
+    assert [e["variety_name"] for e in events] == ["Bell"]
+
+
+def test_update_planting_changing_variety_leaves_other_members_of_old_group_intact():
+    variety_a = _add_variety(
+        common_name="Tomato", variety_name="Cherokee Purple", days_to_maturity_min=60, days_to_maturity_max=70
+    )
+    variety_b = _add_variety(
+        common_name="Pepper", variety_name="Bell", days_to_maturity_min=60, days_to_maturity_max=70
+    )
+    stays_id = db.add_planting(variety_a, "2026-05-01")
+    moves_id = db.add_planting(variety_a, "2026-05-01")
+    db.update_planting(moves_id, variety_b, "2026-05-01")
+    events = db.list_farm_events_in_range(*ALL_TIME)
+    assert sorted(e["variety_name"] for e in events) == ["Bell", "Cherokee Purple"]
+    assert any(e["linked_planting_id"] == stays_id for e in events)
 
 
 def test_delete_planting_removes_its_generated_events():
@@ -756,12 +799,31 @@ def test_merged_group_event_links_to_lowest_planting_id_in_the_group():
     assert event["linked_planting_id"] == first_id
 
 
-def test_two_diagonal_cells_do_not_merge():
+def test_two_diagonal_cells_of_same_variety_and_date_still_merge():
+    "Phase 7: grouping is flat by (variety, planted_date), not spatial adjacency -- position no longer matters."
     variety_id = _add_variety(days_to_maturity_min=60, days_to_maturity_max=70)
     bed_id = _add_bed()
     db.add_planting(variety_id, "2026-05-01", bed_id=bed_id, x_in=0, y_in=0)
     db.add_planting(variety_id, "2026-05-01", bed_id=bed_id, x_in=12, y_in=12)
-    assert len(db.list_farm_events_in_range(*ALL_TIME)) == 2
+    assert len(db.list_farm_events_in_range(*ALL_TIME)) == 1
+
+
+def test_same_variety_and_date_plantings_in_different_beds_merge_into_one_event():
+    variety_id = _add_variety(days_to_maturity_min=60, days_to_maturity_max=70)
+    bed_a = _add_bed(label="Bed A")
+    bed_b = _add_bed(label="Bed B")
+    db.add_planting(variety_id, "2026-05-01", bed_id=bed_a, x_in=0, y_in=0)
+    db.add_planting(variety_id, "2026-05-01", bed_id=bed_b, x_in=0, y_in=0)
+    assert len(db.list_farm_events_in_range(*ALL_TIME)) == 1
+
+
+def test_same_variety_and_date_bed_and_location_plantings_merge_into_one_event():
+    "Grouping is bed-placed or not -- a free-text location planting merges with a bed planting sharing the key."
+    variety_id = _add_variety(days_to_maturity_min=60, days_to_maturity_max=70)
+    bed_id = _add_bed()
+    db.add_planting(variety_id, "2026-05-01", bed_id=bed_id, x_in=0, y_in=0)
+    db.add_planting(variety_id, "2026-05-01", location="Back row")
+    assert len(db.list_farm_events_in_range(*ALL_TIME)) == 1
 
 
 def test_two_adjacent_cells_with_different_planted_dates_do_not_merge():
@@ -794,14 +856,15 @@ def test_three_contiguous_cells_produce_one_event_before_clearing_middle():
     assert len(db.list_farm_events_in_range(*ALL_TIME)) == 1
 
 
-def test_clearing_middle_cell_splits_merged_group_into_two():
+def test_deleting_one_planting_does_not_split_the_remaining_shared_group():
+    "Phase 7: no spatial adjacency to split on -- the survivors still share (variety, planted_date), still one event."
     variety_id = _add_variety(days_to_maturity_min=60, days_to_maturity_max=70)
     bed_id = _add_bed()
     db.add_planting(variety_id, "2026-05-01", bed_id=bed_id, x_in=0, y_in=0)
     middle_id = db.add_planting(variety_id, "2026-05-01", bed_id=bed_id, x_in=12, y_in=0)
     db.add_planting(variety_id, "2026-05-01", bed_id=bed_id, x_in=24, y_in=0)
     db.delete_planting(middle_id)
-    assert len(db.list_farm_events_in_range(*ALL_TIME)) == 2
+    assert len(db.list_farm_events_in_range(*ALL_TIME)) == 1
 
 
 def test_list_plantings_for_bed_returns_empty_list_when_none_exist():

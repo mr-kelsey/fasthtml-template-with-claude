@@ -25,8 +25,6 @@ SUN_NEEDS_OPTIONS = ["full_sun", "partial_shade", "full_shade"]
 
 RELATION_OPTIONS = ["companion", "antagonist"]
 
-CELL_SIZE_IN = 12  # the bed detail grid's visual backdrop cell size; not the unit of storage (see plantings.x_in/y_in)
-
 # Fixed rotation for auto-assigning seed_varieties.color_hex at creation (round-robin by existing
 # count); user can still override before submit. Distinct enough to tell staged/planted dots apart.
 COLOR_PALETTE = [
@@ -39,11 +37,6 @@ COLOR_PALETTE = [
 def next_palette_color(existing_varieties):
     "Round-robins COLOR_PALETTE by how many varieties already exist -- used to prefill the add-variety form."
     return COLOR_PALETTE[len(existing_varieties) % len(COLOR_PALETTE)]
-
-
-def inches_to_cell(inches: float):
-    "Converts an inches position back to its containing whole-foot grid cell (floor)."
-    return int(inches // CELL_SIZE_IN)
 
 
 def parse_optional_int(value: str):

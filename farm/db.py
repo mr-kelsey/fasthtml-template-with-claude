@@ -2,7 +2,7 @@ from datetime import date, timedelta
 
 from sqlalchemy import text
 
-from farm.helpers import compute_window, inches_to_cell
+from farm.helpers import compute_window
 
 SCHEMA_STATEMENTS = [
     """
@@ -205,31 +205,6 @@ _FARM_EVENT_COLUMNS = (
     "fe.id, fe.event_type, fe.title, fe.start_date, fe.end_date, fe.notes, "
     "fe.linked_planting_id, fe.linked_product_application_id, fe.created_at"
 )
-
-
-def _connected_components(rows):
-    """Groups rows sharing a (variety, planted_date) key into clusters of 4-directionally adjacent whole-foot
-    cells, the cells computed from each row's real x_in/y_in position rather than a stored cell_x/cell_y.
-    """
-    by_coord = {(inches_to_cell(row["x_in"]), inches_to_cell(row["y_in"])): row for row in rows}
-    visited = set()
-    clusters = []
-    for coord in by_coord:
-        if coord in visited:
-            continue
-        cluster = []
-        queue = [coord]
-        visited.add(coord)
-        while queue:
-            current = queue.pop()
-            cluster.append(by_coord[current])
-            x, y = current
-            for neighbor in ((x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)):
-                if neighbor in by_coord and neighbor not in visited:
-                    visited.add(neighbor)
-                    queue.append(neighbor)
-        clusters.append(cluster)
-    return clusters
 
 
 def _agronomic_fields(
@@ -739,7 +714,7 @@ class FarmDatabaseMixin:
         source_type: str = "seed",
         soil_temp_f: float = None,
     ):
-        "Returns the new planting's id. Regenerates its (or its bed's) linked farm_events."
+        "Returns the new planting's id. Regenerates the (variety, planted_date) group's linked farm_events."
         fields = self._normalize_planting_fields(
             bed_id, location, quantity, quantity_germinated, notes, x_in, y_in, seed_lot_id,
             transplant_lot_id, source_type, soil_temp_f,
@@ -757,10 +732,7 @@ class FarmDatabaseMixin:
                 {"variety_id": variety_id, "planted_date": planted_date, **fields},
             )
             planting_id = result.lastrowid
-            if bed_id is not None:
-                self._regenerate_bed_farm_events(db_connection, bed_id)
-            else:
-                self._regenerate_farm_events(db_connection, planting_id, variety_id, planted_date)
+            self._regenerate_farm_events(db_connection, variety_id, planted_date)
         return planting_id
 
     def batch_add_plantings(
@@ -775,8 +747,9 @@ class FarmDatabaseMixin:
     ):
         """Inserts one plantings row (quantity=1 -- a lattice stamp is one plant) per (x_in, y_in) in points,
         all in one transaction. Decrements transplant_lots.quantity_on_hand by len(points) once when
-        transplant_lot_id is given, and regenerates the bed's farm_events once at the end rather than once
-        per point -- add_planting's per-call regen would be a full-bed recompute for every point in the batch.
+        transplant_lot_id is given, and regenerates the batch's (variety, planted_date) group's farm_events
+        once at the end rather than once per point -- every point shares the same variety_id/planted_date,
+        so one regen call covers the whole batch.
         Returns the list of new planting ids.
         """
         planting_ids = []
@@ -803,7 +776,7 @@ class FarmDatabaseMixin:
                     ),
                     {"count": len(points), "id": transplant_lot_id},
                 )
-            self._regenerate_bed_farm_events(db_connection, bed_id)
+            self._regenerate_farm_events(db_connection, variety_id, planted_date)
         return planting_ids
 
     def update_planting(
@@ -828,9 +801,9 @@ class FarmDatabaseMixin:
             transplant_lot_id, source_type, soil_temp_f,
         )
         with self.engine.begin() as db_connection:
-            old_bed_id = db_connection.execute(
-                text("SELECT bed_id FROM plantings WHERE id = :id"), {"id": planting_id}
-            ).scalar()
+            old = db_connection.execute(
+                text("SELECT variety_id, planted_date FROM plantings WHERE id = :id"), {"id": planting_id}
+            ).mappings().first()
             db_connection.execute(
                 text(
                     "UPDATE plantings SET variety_id = :variety_id, planted_date = :planted_date, "
@@ -842,22 +815,19 @@ class FarmDatabaseMixin:
                 ),
                 {"id": planting_id, "variety_id": variety_id, "planted_date": planted_date, **fields},
             )
-            if bed_id is not None:
-                self._regenerate_bed_farm_events(db_connection, bed_id)
-            else:
-                self._regenerate_farm_events(db_connection, planting_id, variety_id, planted_date)
-            if old_bed_id is not None and old_bed_id != bed_id:
-                self._regenerate_bed_farm_events(db_connection, old_bed_id)
+            self._regenerate_farm_events(db_connection, variety_id, planted_date)
+            if old is not None and (old["variety_id"], old["planted_date"]) != (variety_id, planted_date):
+                self._regenerate_farm_events(db_connection, old["variety_id"], old["planted_date"])
 
     def delete_planting(self, planting_id: int):
         with self.engine.begin() as db_connection:
-            bed_id = db_connection.execute(
-                text("SELECT bed_id FROM plantings WHERE id = :id"), {"id": planting_id}
-            ).scalar()
+            row = db_connection.execute(
+                text("SELECT variety_id, planted_date FROM plantings WHERE id = :id"), {"id": planting_id}
+            ).mappings().first()
             db_connection.execute(text("DELETE FROM farm_events WHERE linked_planting_id = :id"), {"id": planting_id})
             db_connection.execute(text("DELETE FROM plantings WHERE id = :id"), {"id": planting_id})
-            if bed_id is not None:
-                self._regenerate_bed_farm_events(db_connection, bed_id)
+            if row is not None:
+                self._regenerate_farm_events(db_connection, row["variety_id"], row["planted_date"])
 
     def _insert_farm_event_row(
         self, db_connection, event_type, title, start_date, end_date, linked_planting_id, notes=None,
@@ -877,12 +847,15 @@ class FarmDatabaseMixin:
             },
         )
 
-    def _insert_milestone_events(self, db_connection, linked_planting_id, variety, planted_date, variety_label):
-        "Inserts germination-check/harvest rows for a variety's day-range fields, skipping any window that's unknown."
+    def _insert_milestone_events(self, db_connection, linked_planting_id, variety, planted_date, variety_label, source_type):
+        """Inserts germination-check/harvest rows for a variety's day-range fields, skipping any window that's
+        unknown. Germination-check is additionally gated on source_type == 'seed' -- a transplant already
+        germinated elsewhere (or was purchased), so there's nothing to check on-site.
+        """
         germination_window = compute_window(
             planted_date, variety["germination_days_min"], variety["germination_days_max"]
         )
-        if germination_window:
+        if source_type == "seed" and germination_window:
             self._insert_farm_event_row(
                 db_connection, "germination-check", f"Check germination: {variety_label}",
                 germination_window[0].isoformat(), germination_window[1].isoformat(), linked_planting_id,
@@ -894,45 +867,35 @@ class FarmDatabaseMixin:
                 harvest_window[0].isoformat(), harvest_window[1].isoformat(), linked_planting_id,
             )
 
-    def _regenerate_farm_events(self, db_connection, planting_id, variety_id, planted_date):
-        "Non-bed path: one planting maps to up to one germination-check/harvest event pair, linked to itself."
-        db_connection.execute(text("DELETE FROM farm_events WHERE linked_planting_id = :id"), {"id": planting_id})
-        variety = db_connection.execute(
-            text(f"SELECT {_SEED_VARIETY_COLUMNS} FROM seed_varieties WHERE id = :id"), {"id": variety_id}
-        ).mappings().first()
-        if variety is None:
-            return
-        variety_label = f"{variety['common_name']} - {variety['name']}"
-        self._insert_milestone_events(db_connection, planting_id, variety, planted_date, variety_label)
-
-    def _regenerate_bed_farm_events(self, db_connection, bed_id):
-        """Bed-cell path: recomputes every event for the bed from scratch. Cell-plantings sharing a
-        (variety, planted_date) key and 4-directionally adjacent cells collapse into one event pair,
-        linked to the lowest planting id in that cluster -- so an edit anywhere in the bed can only be
-        gotten right by throwing away and rebuilding the whole bed's events, not patching one planting.
+    def _regenerate_farm_events(self, db_connection, variety_id, planted_date):
+        """Recomputes the germination-check/harvest event pair for every planting sharing this
+        (variety, planted_date) key -- same variety, same day is one calendar reminder regardless of bed
+        placement. Linked to the lowest planting id in the group, so an edit anywhere in the group can only
+        be gotten right by throwing away and rebuilding the whole group's events, not patching one planting.
         """
         db_connection.execute(
-            text("DELETE FROM farm_events WHERE linked_planting_id IN (SELECT id FROM plantings WHERE bed_id = :bed_id)"),
-            {"bed_id": bed_id},
-        )
-        cell_plantings = db_connection.execute(
             text(
-                "SELECT p.id, p.variety_id, p.planted_date, p.x_in, p.y_in, "
-                "sv.common_name, sv.name, sv.germination_days_min, sv.germination_days_max, "
+                "DELETE FROM farm_events WHERE event_type IN ('germination-check', 'harvest') "
+                "AND linked_planting_id IN "
+                "(SELECT id FROM plantings WHERE variety_id = :variety_id AND planted_date = :planted_date)"
+            ),
+            {"variety_id": variety_id, "planted_date": planted_date},
+        )
+        group_rows = db_connection.execute(
+            text(
+                "SELECT p.id, p.source_type, sv.common_name, sv.name, "
+                "sv.germination_days_min, sv.germination_days_max, "
                 "sv.days_to_maturity_min, sv.days_to_maturity_max "
                 "FROM plantings p JOIN seed_varieties sv ON sv.id = p.variety_id "
-                "WHERE p.bed_id = :bed_id AND p.x_in IS NOT NULL AND p.y_in IS NOT NULL"
+                "WHERE p.variety_id = :variety_id AND p.planted_date = :planted_date"
             ),
-            {"bed_id": bed_id},
+            {"variety_id": variety_id, "planted_date": planted_date},
         ).mappings().all()
-        groups = {}
-        for row in cell_plantings:
-            groups.setdefault((row["variety_id"], row["planted_date"]), []).append(row)
-        for (_variety_id, planted_date), rows in groups.items():
-            for cluster in _connected_components(rows):
-                anchor = min(cluster, key=lambda row: row["id"])
-                variety_label = f"{anchor['common_name']} - {anchor['name']}"
-                self._insert_milestone_events(db_connection, anchor["id"], anchor, planted_date, variety_label)
+        if not group_rows:
+            return
+        anchor = min(group_rows, key=lambda row: row["id"])
+        variety_label = f"{anchor['common_name']} - {anchor['name']}"
+        self._insert_milestone_events(db_connection, anchor["id"], anchor, planted_date, variety_label, anchor["source_type"])
 
     def add_farm_event(
         self, event_type: str, title: str, start_date: str, end_date: str, notes: str = None, linked_planting_id: int = None
@@ -1208,7 +1171,7 @@ class FarmDatabaseMixin:
             ).mappings().first()
 
     def _regenerate_product_reminder(self, db_connection, application_id, product_id, bed_id, location, applied_date):
-        "Supersedes the prior reminder for this exact (product_id, bed_id, location) target, mirroring _regenerate_bed_farm_events."
+        "Supersedes the prior reminder for this exact (product_id, bed_id, location) target, mirroring _regenerate_farm_events."
         db_connection.execute(
             text(
                 "DELETE FROM farm_events WHERE event_type = 'product-reminder' AND linked_product_application_id IN ("
