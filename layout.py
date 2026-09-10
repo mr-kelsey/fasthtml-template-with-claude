@@ -25,6 +25,7 @@ SUBDOMAINS = {
             ("Varieties", "/seed-varieties"),
             ("Inventory", "/inventory"),
             ("Plantings", "/plantings"),
+            ("Products", "/products"),
             ("Land Map", "/land-plots"),
         ],
     },

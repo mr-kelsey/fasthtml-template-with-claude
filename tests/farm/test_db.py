@@ -1008,3 +1008,225 @@ def test_batch_add_plantings_second_batch_of_same_variety_and_date_merges_into_s
     db.batch_add_plantings(variety_id, "2026-05-01", bed_id, "seed", [(0, 0), (12, 0)])
     db.batch_add_plantings(variety_id, "2026-05-01", bed_id, "seed", [(24, 0)])
     assert len(db.list_farm_events_in_range(*ALL_TIME)) == 1
+
+
+def _add_garden_product(name="Fish Emulsion", product_type="fertilizer", **kwargs):
+    db.add_garden_product(name, product_type=product_type, **kwargs)
+    return db.list_garden_products()[0]["id"]
+
+
+def test_list_garden_products_returns_empty_list_when_none_exist():
+    assert db.list_garden_products() == []
+
+
+def test_add_garden_product_persists_name_and_type():
+    db.add_garden_product("Fish Emulsion", product_type="fertilizer")
+    product = db.list_garden_products()[0]
+    assert (product["name"], product["product_type"]) == ("Fish Emulsion", "fertilizer")
+
+
+def test_add_garden_product_persists_npk_and_benefit_notes():
+    db.add_garden_product(
+        "Fish Emulsion", product_type="fertilizer", npk_n=5.0, npk_p=1.0, npk_k=1.0, benefit_notes="General feeding"
+    )
+    product = db.list_garden_products()[0]
+    assert (product["npk_n"], product["npk_p"], product["npk_k"], product["benefit_notes"]) == (5.0, 1.0, 1.0, "General feeding")
+
+
+def test_add_garden_product_persists_application_frequency_days():
+    db.add_garden_product("Fish Emulsion", application_frequency_days=14)
+    assert db.list_garden_products()[0]["application_frequency_days"] == 14
+
+
+def test_add_garden_product_defaults_optional_fields_to_none():
+    db.add_garden_product("Fish Emulsion")
+    product = db.list_garden_products()[0]
+    assert (product["product_type"], product["npk_n"], product["benefit_notes"], product["application_frequency_days"]) == (
+        None, None, None, None,
+    )
+
+
+def test_get_garden_product_returns_matching_row():
+    db.add_garden_product("Fish Emulsion")
+    product_id = db.list_garden_products()[0]["id"]
+    assert db.get_garden_product(product_id)["name"] == "Fish Emulsion"
+
+
+def test_get_garden_product_returns_none_when_not_found():
+    assert db.get_garden_product(999999) is None
+
+
+def test_update_garden_product_changes_application_frequency_days():
+    product_id = _add_garden_product()
+    db.update_garden_product(product_id, "Fish Emulsion", product_type="fertilizer", application_frequency_days=21)
+    assert db.get_garden_product(product_id)["application_frequency_days"] == 21
+
+
+def test_delete_garden_product_removes_it():
+    product_id = _add_garden_product()
+    db.delete_garden_product(product_id)
+    assert db.list_garden_products() == []
+
+
+def test_delete_nonexistent_garden_product_is_a_noop():
+    db.delete_garden_product(999999)
+
+
+def test_delete_garden_product_cascades_to_its_applications():
+    product_id = _add_garden_product()
+    db.add_product_application(product_id, "2026-05-01", location="North fence row")
+    db.delete_garden_product(product_id)
+    assert db.list_product_applications() == []
+
+
+def test_delete_garden_product_cascades_to_its_applications_farm_events():
+    product_id = _add_garden_product(application_frequency_days=14)
+    db.add_product_application(product_id, "2026-05-01", location="North fence row")
+    db.delete_garden_product(product_id)
+    assert db.list_farm_events_in_range(*ALL_TIME) == []
+
+
+def test_list_product_applications_returns_empty_list_when_none_exist():
+    assert db.list_product_applications() == []
+
+
+def test_add_product_application_persists_date_amount_and_unit():
+    product_id = _add_garden_product()
+    db.add_product_application(product_id, "2026-05-01", location="North fence row", amount=2.5, unit="cups")
+    application = db.list_product_applications()[0]
+    assert (application["applied_date"], application["amount"], application["unit"]) == ("2026-05-01", 2.5, "cups")
+
+
+def test_add_product_application_persists_bed_id():
+    product_id = _add_garden_product()
+    bed_id = _add_bed()
+    db.add_product_application(product_id, "2026-05-01", bed_id=bed_id)
+    assert db.list_product_applications()[0]["bed_id"] == bed_id
+
+
+def test_add_product_application_defaults_optional_fields_to_none():
+    product_id = _add_garden_product()
+    db.add_product_application(product_id, "2026-05-01")
+    application = db.list_product_applications()[0]
+    assert (application["bed_id"], application["location"], application["amount"], application["notes"]) == (
+        None, None, None, None,
+    )
+
+
+def test_list_product_applications_includes_product_name_from_join():
+    product_id = _add_garden_product(name="Fish Emulsion")
+    db.add_product_application(product_id, "2026-05-01")
+    assert db.list_product_applications()[0]["product_name"] == "Fish Emulsion"
+
+
+def test_get_product_application_returns_matching_row():
+    product_id = _add_garden_product()
+    db.add_product_application(product_id, "2026-05-01", unit="cups")
+    application_id = db.list_product_applications()[0]["id"]
+    assert db.get_product_application(application_id)["unit"] == "cups"
+
+
+def test_get_product_application_returns_none_when_not_found():
+    assert db.get_product_application(999999) is None
+
+
+def test_update_product_application_changes_amount():
+    product_id = _add_garden_product()
+    db.add_product_application(product_id, "2026-05-01", amount=1.0)
+    application_id = db.list_product_applications()[0]["id"]
+    db.update_product_application(application_id, product_id, "2026-05-01", amount=2.0)
+    assert db.get_product_application(application_id)["amount"] == 2.0
+
+
+def test_delete_product_application_removes_it():
+    product_id = _add_garden_product()
+    db.add_product_application(product_id, "2026-05-01")
+    application_id = db.list_product_applications()[0]["id"]
+    db.delete_product_application(application_id)
+    assert db.list_product_applications() == []
+
+
+def test_delete_nonexistent_product_application_is_a_noop():
+    db.delete_product_application(999999)
+    assert db.list_product_applications() == []
+
+
+def test_add_product_application_with_frequency_creates_reminder_event():
+    product_id = _add_garden_product(application_frequency_days=14)
+    db.add_product_application(product_id, "2026-05-01", location="North fence row")
+    events = db.list_farm_events_in_range(*ALL_TIME)
+    assert [e["event_type"] for e in events] == ["product-reminder"]
+
+
+def test_reminder_event_falls_on_applied_date_plus_frequency():
+    product_id = _add_garden_product(application_frequency_days=14)
+    db.add_product_application(product_id, "2026-05-01", location="North fence row")
+    reminder = db.list_farm_events_in_range(*ALL_TIME)[0]
+    assert (reminder["start_date"], reminder["end_date"]) == ("2026-05-15", "2026-05-15")
+
+
+def test_add_product_application_without_frequency_creates_no_reminder():
+    product_id = _add_garden_product()
+    db.add_product_application(product_id, "2026-05-01", location="North fence row")
+    assert db.list_farm_events_in_range(*ALL_TIME) == []
+
+
+def test_second_application_for_same_target_supersedes_prior_reminder():
+    product_id = _add_garden_product(application_frequency_days=14)
+    db.add_product_application(product_id, "2026-05-01", location="North fence row")
+    db.add_product_application(product_id, "2026-05-15", location="North fence row")
+    events = db.list_farm_events_in_range(*ALL_TIME)
+    assert len(events) == 1
+
+
+def test_second_application_reminder_uses_latest_applied_date():
+    product_id = _add_garden_product(application_frequency_days=14)
+    db.add_product_application(product_id, "2026-05-01", location="North fence row")
+    db.add_product_application(product_id, "2026-05-15", location="North fence row")
+    reminder = db.list_farm_events_in_range(*ALL_TIME)[0]
+    assert reminder["start_date"] == "2026-05-29"
+
+
+def test_application_for_different_location_does_not_supersede_reminder():
+    product_id = _add_garden_product(application_frequency_days=14)
+    db.add_product_application(product_id, "2026-05-01", location="North fence row")
+    db.add_product_application(product_id, "2026-05-01", location="South fence row")
+    assert len(db.list_farm_events_in_range(*ALL_TIME)) == 2
+
+
+def test_application_for_different_bed_does_not_supersede_reminder():
+    product_id = _add_garden_product(application_frequency_days=14)
+    db.add_land_plot("Plot A", 40, 60)
+    db.add_land_plot("Plot B", 40, 60)
+    plots_by_name = {p["name"]: p["id"] for p in db.list_land_plots()}
+    bed_a = _add_bed(plot_id=plots_by_name["Plot A"], label="Bed A")
+    bed_b = _add_bed(plot_id=plots_by_name["Plot B"], label="Bed B")
+    db.add_product_application(product_id, "2026-05-01", bed_id=bed_a)
+    db.add_product_application(product_id, "2026-05-01", bed_id=bed_b)
+    assert len(db.list_farm_events_in_range(*ALL_TIME)) == 2
+
+
+def test_delete_product_application_removes_its_reminder():
+    product_id = _add_garden_product(application_frequency_days=14)
+    db.add_product_application(product_id, "2026-05-01", location="North fence row")
+    application_id = db.list_product_applications()[0]["id"]
+    db.delete_product_application(application_id)
+    assert db.list_farm_events_in_range(*ALL_TIME) == []
+
+
+def test_list_beds_returns_empty_list_when_none_exist():
+    assert db.list_beds() == []
+
+
+def test_list_beds_spans_every_plot():
+    plot_a_id = _add_plot(name="Plot A")
+    plot_b_id = _add_plot(name="Plot B")
+    _add_bed(plot_id=plot_a_id, label="Bed 1")
+    _add_bed(plot_id=plot_b_id, label="Bed 2")
+    assert len(db.list_beds()) == 2
+
+
+def test_list_beds_includes_plot_name_from_join():
+    plot_id = _add_plot(name="Back Field")
+    _add_bed(plot_id=plot_id, label="Bed 1")
+    assert db.list_beds()[0]["plot_name"] == "Back Field"

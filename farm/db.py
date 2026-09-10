@@ -1,3 +1,5 @@
+from datetime import date, timedelta
+
 from sqlalchemy import text
 
 from farm.helpers import compute_window, inches_to_cell
@@ -127,6 +129,33 @@ SCHEMA_STATEMENTS = [
     ("plantings", "source_type", "TEXT NOT NULL DEFAULT 'seed'"),
     ("seed_varieties", "color_hex", "TEXT"),
     ("plantings", "soil_temp_f", "REAL"),
+    """
+    CREATE TABLE IF NOT EXISTS garden_products (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        product_type TEXT,
+        npk_n REAL,
+        npk_p REAL,
+        npk_k REAL,
+        benefit_notes TEXT,
+        application_frequency_days INTEGER,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS product_applications (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        product_id INTEGER NOT NULL,
+        applied_date TEXT NOT NULL,
+        bed_id INTEGER,
+        location TEXT,
+        amount REAL,
+        unit TEXT,
+        notes TEXT,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
+    """,
+    ("farm_events", "linked_product_application_id", "INTEGER"),
 ]
 
 _AGRONOMIC_COLUMNS = (
@@ -164,7 +193,18 @@ _BED_COLUMNS = (
     "id, plot_id, label, x, y, width_ft, length_ft, rotation_deg, sun_exposure, irrigation_zone, created_at"
 )
 
-_FARM_EVENT_COLUMNS = "fe.id, fe.event_type, fe.title, fe.start_date, fe.end_date, fe.notes, fe.linked_planting_id, fe.created_at"
+_GARDEN_PRODUCT_COLUMNS = (
+    "id, name, product_type, npk_n, npk_p, npk_k, benefit_notes, application_frequency_days, created_at"
+)
+
+_PRODUCT_APPLICATION_COLUMNS = (
+    "id, product_id, applied_date, bed_id, location, amount, unit, notes, created_at"
+)
+
+_FARM_EVENT_COLUMNS = (
+    "fe.id, fe.event_type, fe.title, fe.start_date, fe.end_date, fe.notes, "
+    "fe.linked_planting_id, fe.linked_product_application_id, fe.created_at"
+)
 
 
 def _connected_components(rows):
@@ -819,15 +859,21 @@ class FarmDatabaseMixin:
             if bed_id is not None:
                 self._regenerate_bed_farm_events(db_connection, bed_id)
 
-    def _insert_farm_event_row(self, db_connection, event_type, title, start_date, end_date, linked_planting_id, notes=None):
+    def _insert_farm_event_row(
+        self, db_connection, event_type, title, start_date, end_date, linked_planting_id, notes=None,
+        linked_product_application_id=None,
+    ):
         db_connection.execute(
             text(
-                "INSERT INTO farm_events (event_type, title, start_date, end_date, notes, linked_planting_id) "
-                "VALUES (:event_type, :title, :start_date, :end_date, :notes, :linked_planting_id)"
+                "INSERT INTO farm_events (event_type, title, start_date, end_date, notes, linked_planting_id, "
+                "linked_product_application_id) "
+                "VALUES (:event_type, :title, :start_date, :end_date, :notes, :linked_planting_id, "
+                ":linked_product_application_id)"
             ),
             {
                 "event_type": event_type, "title": title, "start_date": start_date, "end_date": end_date,
                 "notes": notes, "linked_planting_id": linked_planting_id,
+                "linked_product_application_id": linked_product_application_id,
             },
         )
 
@@ -902,11 +948,13 @@ class FarmDatabaseMixin:
             return db_connection.execute(
                 text(
                     f"SELECT {_FARM_EVENT_COLUMNS}, sv.name AS variety_name, sv.common_name AS variety_common_name, "
-                    "b.label AS bed_label, p.bed_id AS planting_bed_id "
+                    "b.label AS bed_label, p.bed_id AS planting_bed_id, gp.name AS product_name "
                     "FROM farm_events fe "
                     "LEFT JOIN plantings p ON p.id = fe.linked_planting_id "
                     "LEFT JOIN seed_varieties sv ON sv.id = p.variety_id "
                     "LEFT JOIN beds b ON b.id = p.bed_id "
+                    "LEFT JOIN product_applications pa ON pa.id = fe.linked_product_application_id "
+                    "LEFT JOIN garden_products gp ON gp.id = pa.product_id "
                     "WHERE fe.start_date <= :range_end AND fe.end_date >= :range_start "
                     "ORDER BY fe.start_date"
                 ),
@@ -1035,3 +1083,206 @@ class FarmDatabaseMixin:
     def delete_bed(self, bed_id: int):
         with self.engine.begin() as db_connection:
             db_connection.execute(text("DELETE FROM beds WHERE id = :id"), {"id": bed_id})
+
+    def list_beds(self):
+        "Every bed across every plot, joined with its plot's name -- for the product-application form's bed picker."
+        with self.engine.connect() as db_connection:
+            return db_connection.execute(
+                text(
+                    "SELECT b.id, b.plot_id, b.label, b.x, b.y, b.width_ft, b.length_ft, b.rotation_deg, "
+                    "b.sun_exposure, b.irrigation_zone, b.created_at, lp.name AS plot_name "
+                    "FROM beds b JOIN land_plots lp ON lp.id = b.plot_id "
+                    "ORDER BY lp.name, b.label"
+                )
+            ).mappings().all()
+
+    def list_garden_products(self):
+        with self.engine.connect() as db_connection:
+            return db_connection.execute(
+                text(f"SELECT {_GARDEN_PRODUCT_COLUMNS} FROM garden_products ORDER BY name")
+            ).mappings().all()
+
+    def get_garden_product(self, product_id: int):
+        with self.engine.connect() as db_connection:
+            return db_connection.execute(
+                text(f"SELECT {_GARDEN_PRODUCT_COLUMNS} FROM garden_products WHERE id = :id"),
+                {"id": product_id},
+            ).mappings().first()
+
+    @staticmethod
+    def _normalize_garden_product_fields(product_type, npk_n, npk_p, npk_k, benefit_notes, application_frequency_days):
+        return {
+            "product_type": product_type or None,
+            "npk_n": npk_n,
+            "npk_p": npk_p,
+            "npk_k": npk_k,
+            "benefit_notes": benefit_notes or None,
+            "application_frequency_days": application_frequency_days,
+        }
+
+    def add_garden_product(
+        self,
+        name: str,
+        product_type: str = None,
+        npk_n: float = None,
+        npk_p: float = None,
+        npk_k: float = None,
+        benefit_notes: str = None,
+        application_frequency_days: int = None,
+    ):
+        fields = self._normalize_garden_product_fields(
+            product_type, npk_n, npk_p, npk_k, benefit_notes, application_frequency_days
+        )
+        with self.engine.begin() as db_connection:
+            db_connection.execute(
+                text(
+                    "INSERT INTO garden_products (name, product_type, npk_n, npk_p, npk_k, benefit_notes, "
+                    "application_frequency_days) "
+                    "VALUES (:name, :product_type, :npk_n, :npk_p, :npk_k, :benefit_notes, "
+                    ":application_frequency_days)"
+                ),
+                {"name": name, **fields},
+            )
+
+    def update_garden_product(
+        self,
+        product_id: int,
+        name: str,
+        product_type: str = None,
+        npk_n: float = None,
+        npk_p: float = None,
+        npk_k: float = None,
+        benefit_notes: str = None,
+        application_frequency_days: int = None,
+    ):
+        fields = self._normalize_garden_product_fields(
+            product_type, npk_n, npk_p, npk_k, benefit_notes, application_frequency_days
+        )
+        with self.engine.begin() as db_connection:
+            db_connection.execute(
+                text(
+                    "UPDATE garden_products SET name = :name, product_type = :product_type, npk_n = :npk_n, "
+                    "npk_p = :npk_p, npk_k = :npk_k, benefit_notes = :benefit_notes, "
+                    "application_frequency_days = :application_frequency_days "
+                    "WHERE id = :id"
+                ),
+                {"id": product_id, "name": name, **fields},
+            )
+
+    def delete_garden_product(self, product_id: int):
+        "Cascades to this product's applications and their farm_events, since there's no FK ON DELETE CASCADE."
+        with self.engine.begin() as db_connection:
+            db_connection.execute(
+                text(
+                    "DELETE FROM farm_events WHERE linked_product_application_id IN "
+                    "(SELECT id FROM product_applications WHERE product_id = :product_id)"
+                ),
+                {"product_id": product_id},
+            )
+            db_connection.execute(
+                text("DELETE FROM product_applications WHERE product_id = :product_id"), {"product_id": product_id}
+            )
+            db_connection.execute(text("DELETE FROM garden_products WHERE id = :id"), {"id": product_id})
+
+    def list_product_applications(self):
+        "Joined with garden_products and beds/land_plots so callers get display labels for both sides of the target."
+        with self.engine.connect() as db_connection:
+            return db_connection.execute(
+                text(
+                    "SELECT pa.id, pa.product_id, pa.applied_date, pa.bed_id, pa.location, pa.amount, pa.unit, "
+                    "pa.notes, pa.created_at, gp.name AS product_name, gp.product_type, "
+                    "b.label AS bed_label, lp.name AS plot_name "
+                    "FROM product_applications pa "
+                    "LEFT JOIN garden_products gp ON gp.id = pa.product_id "
+                    "LEFT JOIN beds b ON b.id = pa.bed_id "
+                    "LEFT JOIN land_plots lp ON lp.id = b.plot_id "
+                    "ORDER BY pa.applied_date DESC, pa.id DESC"
+                )
+            ).mappings().all()
+
+    def get_product_application(self, application_id: int):
+        with self.engine.connect() as db_connection:
+            return db_connection.execute(
+                text(f"SELECT {_PRODUCT_APPLICATION_COLUMNS} FROM product_applications WHERE id = :id"),
+                {"id": application_id},
+            ).mappings().first()
+
+    def _regenerate_product_reminder(self, db_connection, application_id, product_id, bed_id, location, applied_date):
+        "Supersedes the prior reminder for this exact (product_id, bed_id, location) target, mirroring _regenerate_bed_farm_events."
+        db_connection.execute(
+            text(
+                "DELETE FROM farm_events WHERE event_type = 'product-reminder' AND linked_product_application_id IN ("
+                "SELECT pa.id FROM product_applications pa WHERE pa.product_id = :product_id "
+                "AND pa.bed_id IS :bed_id AND pa.location IS :location)"
+            ),
+            {"product_id": product_id, "bed_id": bed_id, "location": location},
+        )
+        product = db_connection.execute(
+            text(f"SELECT {_GARDEN_PRODUCT_COLUMNS} FROM garden_products WHERE id = :id"), {"id": product_id}
+        ).mappings().first()
+        if product is None or product["application_frequency_days"] is None:
+            return
+        next_due = (date.fromisoformat(applied_date) + timedelta(days=product["application_frequency_days"])).isoformat()
+        self._insert_farm_event_row(
+            db_connection, "product-reminder", f"Reapply: {product['name']}", next_due, next_due,
+            None, notes=None, linked_product_application_id=application_id,
+        )
+
+    def add_product_application(
+        self,
+        product_id: int,
+        applied_date: str,
+        bed_id: int = None,
+        location: str = None,
+        amount: float = None,
+        unit: str = None,
+        notes: str = None,
+    ):
+        "Returns the new application's id. Regenerates the (product_id, bed_id, location) target's reminder."
+        with self.engine.begin() as db_connection:
+            result = db_connection.execute(
+                text(
+                    "INSERT INTO product_applications (product_id, applied_date, bed_id, location, amount, unit, "
+                    "notes) "
+                    "VALUES (:product_id, :applied_date, :bed_id, :location, :amount, :unit, :notes)"
+                ),
+                {
+                    "product_id": product_id, "applied_date": applied_date, "bed_id": bed_id,
+                    "location": location or None, "amount": amount, "unit": unit or None, "notes": notes or None,
+                },
+            )
+            application_id = result.lastrowid
+            self._regenerate_product_reminder(db_connection, application_id, product_id, bed_id, location or None, applied_date)
+        return application_id
+
+    def update_product_application(
+        self,
+        application_id: int,
+        product_id: int,
+        applied_date: str,
+        bed_id: int = None,
+        location: str = None,
+        amount: float = None,
+        unit: str = None,
+        notes: str = None,
+    ):
+        "Full-field update. Does not touch farm_events -- reminder regeneration only happens on logging a new application."
+        with self.engine.begin() as db_connection:
+            db_connection.execute(
+                text(
+                    "UPDATE product_applications SET product_id = :product_id, applied_date = :applied_date, "
+                    "bed_id = :bed_id, location = :location, amount = :amount, unit = :unit, notes = :notes "
+                    "WHERE id = :id"
+                ),
+                {
+                    "id": application_id, "product_id": product_id, "applied_date": applied_date, "bed_id": bed_id,
+                    "location": location or None, "amount": amount, "unit": unit or None, "notes": notes or None,
+                },
+            )
+
+    def delete_product_application(self, application_id: int):
+        with self.engine.begin() as db_connection:
+            db_connection.execute(
+                text("DELETE FROM farm_events WHERE linked_product_application_id = :id"), {"id": application_id}
+            )
+            db_connection.execute(text("DELETE FROM product_applications WHERE id = :id"), {"id": application_id})

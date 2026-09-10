@@ -22,6 +22,26 @@ def _clean_farm_events():
 
 
 @pytest.fixture(autouse=True)
+def _clean_product_applications():
+    "Start and end each test with an empty product_applications table (cleaned before garden_products, its parent)."
+    with db.engine.begin() as db_connection:
+        db_connection.execute(text("DELETE FROM product_applications"))
+    yield
+    with db.engine.begin() as db_connection:
+        db_connection.execute(text("DELETE FROM product_applications"))
+
+
+@pytest.fixture(autouse=True)
+def _clean_garden_products():
+    "Start and end each test with an empty garden_products table in the isolated test database (.env.test)."
+    with db.engine.begin() as db_connection:
+        db_connection.execute(text("DELETE FROM garden_products"))
+    yield
+    with db.engine.begin() as db_connection:
+        db_connection.execute(text("DELETE FROM garden_products"))
+
+
+@pytest.fixture(autouse=True)
 def _clean_plantings():
     "Start and end each test with an empty plantings table (cleaned before seed_varieties/plants, its parents)."
     with db.engine.begin() as db_connection:

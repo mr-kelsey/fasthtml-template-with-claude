@@ -1221,3 +1221,151 @@ def test_delete_linked_farm_event_does_not_remove_it(client):
 def test_add_custom_farm_event_rejects_blank_title(client):
     response = client.post("/farm-calendar", data={"title": "", "event_type": "custom", "start_date": "2026-09-10"})
     assert response.status_code == 422
+
+
+def _create_garden_product(client, name="Fish Emulsion", **fields):
+    client.post("/garden-products", data={"name": name, **fields})
+    return db.list_garden_products()[0]["id"]
+
+
+def test_products_page_returns_200(client):
+    response = client.get("/products")
+    assert response.status_code == 200
+
+
+def test_products_page_shows_empty_states_when_none_exist(client):
+    response = client.get("/products")
+    assert "No garden products yet" in response.text
+    assert "No product applications yet" in response.text
+
+
+def test_add_garden_product_redirects_with_303(client):
+    response = client.post("/garden-products", data={"name": "Fish Emulsion"}, follow_redirects=False)
+    assert response.status_code == 303
+
+
+def test_add_garden_product_appears_in_list(client):
+    client.post("/garden-products", data={"name": "Fish Emulsion", "product_type": "fertilizer"})
+    response = client.get("/products")
+    assert "Fish Emulsion" in response.text
+
+
+def test_add_garden_product_rejects_blank_name(client):
+    response = client.post("/garden-products", data={"name": ""})
+    assert response.status_code == 422
+
+
+def test_add_garden_product_rejects_malformed_npk(client):
+    response = client.post("/garden-products", data={"name": "Fish Emulsion", "npk": "not-a-formula"})
+    assert response.status_code == 422
+
+
+def test_add_garden_product_rejects_non_numeric_application_frequency(client):
+    response = client.post(
+        "/garden-products", data={"name": "Fish Emulsion", "application_frequency_days": "often"}
+    )
+    assert response.status_code == 422
+
+
+def test_edit_garden_product_page_returns_200(client):
+    product_id = _create_garden_product(client)
+    response = client.get(f"/garden-products/{product_id}/edit")
+    assert response.status_code == 200
+
+
+def test_edit_garden_product_page_returns_404_when_not_found(client):
+    response = client.get("/garden-products/999999/edit")
+    assert response.status_code == 404
+
+
+def test_edit_garden_product_updates_application_frequency(client):
+    product_id = _create_garden_product(client)
+    client.post(f"/garden-products/{product_id}/edit", data={"name": "Fish Emulsion", "application_frequency_days": "21"})
+    assert db.get_garden_product(product_id)["application_frequency_days"] == 21
+
+
+def test_delete_garden_product_removes_it(client):
+    product_id = _create_garden_product(client)
+    client.post(f"/garden-products/{product_id}/delete")
+    assert db.list_garden_products() == []
+
+
+def test_add_product_application_redirects_with_303(client):
+    product_id = _create_garden_product(client)
+    response = client.post(
+        "/product-applications",
+        data={"product_id": str(product_id), "applied_date": "2026-05-01", "location": "North fence row"},
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+
+
+def test_add_product_application_appears_in_list(client):
+    product_id = _create_garden_product(client)
+    client.post(
+        "/product-applications",
+        data={"product_id": str(product_id), "applied_date": "2026-05-01", "location": "North fence row"},
+    )
+    response = client.get("/products")
+    assert "North fence row" in response.text
+
+
+def test_add_product_application_with_bed_id_ignores_location_text(client):
+    product_id = _create_garden_product(client)
+    plot_id = _create_plot(client)
+    bed_id = _create_bed(client, plot_id, label="Tomato Bed")
+    client.post(
+        "/product-applications",
+        data={
+            "product_id": str(product_id), "applied_date": "2026-05-01", "bed_id": str(bed_id),
+            "location": "Should be ignored",
+        },
+    )
+    application = db.list_product_applications()[0]
+    assert (application["bed_id"], application["location"]) == (bed_id, None)
+
+
+def test_add_product_application_rejects_invalid_product(client):
+    response = client.post(
+        "/product-applications", data={"product_id": "999999", "applied_date": "2026-05-01"}
+    )
+    assert response.status_code == 422
+
+
+def test_add_product_application_rejects_blank_applied_date(client):
+    product_id = _create_garden_product(client)
+    response = client.post("/product-applications", data={"product_id": str(product_id), "applied_date": ""})
+    assert response.status_code == 422
+
+
+def test_delete_product_application_removes_it(client):
+    product_id = _create_garden_product(client)
+    client.post(
+        "/product-applications", data={"product_id": str(product_id), "applied_date": "2026-05-01"}
+    )
+    application_id = db.list_product_applications()[0]["id"]
+    client.post(f"/product-applications/{application_id}/delete")
+    assert db.list_product_applications() == []
+
+
+def test_product_reminder_event_appears_on_calendar_grid(client):
+    product_id = _create_garden_product(client, application_frequency_days="14")
+    client.post(
+        "/product-applications",
+        data={"product_id": str(product_id), "applied_date": "2026-05-01", "location": "North fence row"},
+    )
+    reminder = db.list_farm_events_in_range("2000-01-01", "2100-01-01")[0]
+    reminder_date = date.fromisoformat(reminder["start_date"])
+    response = client.get(_farm_calendar_url(reminder_date.year, reminder_date.month))
+    assert "Fish Emulsion" in response.text
+
+
+def test_delete_product_reminder_event_is_forbidden(client):
+    product_id = _create_garden_product(client, application_frequency_days="14")
+    client.post(
+        "/product-applications",
+        data={"product_id": str(product_id), "applied_date": "2026-05-01", "location": "North fence row"},
+    )
+    event_id = db.list_farm_events_in_range("2000-01-01", "2100-01-01")[0]["id"]
+    response = client.post(f"/farm-calendar/{event_id}/delete")
+    assert response.status_code == 403

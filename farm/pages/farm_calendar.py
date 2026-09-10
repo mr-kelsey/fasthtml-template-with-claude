@@ -12,6 +12,7 @@ router = fast.APIRouter()
 EVENT_TYPE_COLORS = {
     "germination-check": "#4caf50",
     "harvest": "#ff9800",
+    "product-reminder": "#00897b",
     "custom": "#999999",
 }
 
@@ -85,13 +86,15 @@ def _custom_event_form(default_date, year, month):
 
 
 def _farm_event_row(event):
-    "Auto-generated events (linked_planting_id set) link back to their source instead of offering delete."
+    "Auto-generated events (linked_planting_id/linked_product_application_id set) link back to their source instead of offering delete."
     label = f"{event['title']} ({event['event_type']})"
     if event["linked_planting_id"] is not None:
         detail_href = (
             f"/beds/{event['planting_bed_id']}" if event["planting_bed_id"] else f"/plantings/{event['linked_planting_id']}/edit"
         )
         return fast.Li(label, " — auto-generated — ", fast.A("View source", href=detail_href))
+    if event["linked_product_application_id"] is not None:
+        return fast.Li(label, " — auto-generated — ", fast.A("View source", href="/products"))
     return fast.Li(
         label,
         fast.Form(
@@ -171,7 +174,7 @@ def delete_farm_event_route(event_id: int):
     event = db.get_farm_event(event_id)
     if event is None:
         return fast.Redirect("/farm-calendar")
-    if event["linked_planting_id"] is not None:
+    if event["linked_planting_id"] is not None or event["linked_product_application_id"] is not None:
         return fast.Response("Auto-generated events can't be deleted directly.", status_code=403)
     db.delete_farm_event(event_id)
     return fast.Redirect("/farm-calendar")
