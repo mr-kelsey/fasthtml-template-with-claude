@@ -29,6 +29,7 @@
     var lot_select = document.getElementById("batch-transplant-lot-select");
     var lot_quantity_wrap = document.getElementById("armed-lot-quantity-wrap");
     var lot_quantity_input = document.getElementById("armed-lot-quantity-input");
+    var quantity_per_point_wrap = document.getElementById("batch-quantity-per-point-wrap");
     var grid_offset_controls = document.getElementById("grid-offset-controls");
     var zoom_controls = document.getElementById("zoom-controls");
     var zoom_display = document.getElementById("zoom-level-display");
@@ -218,6 +219,7 @@
         batch_staged_count.textContent = state.staged_points.length + " point(s) staged";
         lot_select.hidden = state.mode !== "transplant";
         if (state.mode === "transplant") populate_lot_select();
+        quantity_per_point_wrap.hidden = state.mode !== "seed";
         sync_lot_quantity_input();
     }
 

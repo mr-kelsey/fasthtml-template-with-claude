@@ -573,6 +573,17 @@ def test_delete_planting_removes_it(client):
     assert db.list_plantings() == []
 
 
+def test_delete_planting_redirects_to_plantings_list_even_from_a_bed(client):
+    plot_id = _create_plot(client)
+    bed_id = _create_bed(client, plot_id)
+    variety_id = _create_variety(client)
+    client.post("/seed-lots", data={"variety_id": str(variety_id)})
+    _stage_batch(client, bed_id, variety_id, [(0, 0)])
+    planting_id = db.list_plantings()[0]["id"]
+    response = client.post(f"/plantings/{planting_id}/delete", follow_redirects=False)
+    assert response.headers["location"] == "/plantings"
+
+
 def test_update_planting_rejects_quantity_culled_exceeding_germinated(client):
     variety_id = _create_variety(client)
     client.post(
@@ -1019,6 +1030,16 @@ def test_delete_bed_redirects_to_plot_map(client):
     assert response.headers["location"] == f"/land-plots/{plot_id}/map"
 
 
+def test_delete_bed_also_deletes_its_plantings(client):
+    plot_id = _create_plot(client)
+    bed_id = _create_bed(client, plot_id)
+    variety_id = _create_variety(client)
+    client.post("/seed-lots", data={"variety_id": str(variety_id)})
+    _stage_batch(client, bed_id, variety_id, [(0, 0)])
+    client.post(f"/beds/{bed_id}/delete")
+    assert db.list_plantings() == []
+
+
 def _create_shade_source(client, plot_id, label="Oak tree"):
     client.post(f"/land-plots/{plot_id}/shade-sources", data={"label": label})
     return db.list_shade_sources_for_plot(plot_id)[0]["id"]
@@ -1176,17 +1197,15 @@ def test_bed_detail_page_shows_land_plot_name(client):
 
 
 def _stage_batch(client, bed_id, variety_id, points, source_type="seed", planted_date="2026-05-01", follow_redirects=True, **extra):
-    return client.post(
-        f"/beds/{bed_id}/cells/batch",
-        data={
-            "variety_id": str(variety_id),
-            "source_type": source_type,
-            "planted_date": planted_date,
-            "points": json.dumps([{"x_in": x, "y_in": y} for x, y in points]),
-            **extra,
-        },
-        follow_redirects=follow_redirects,
-    )
+    data = {
+        "variety_id": str(variety_id),
+        "source_type": source_type,
+        "planted_date": planted_date,
+        "points": json.dumps([{"x_in": x, "y_in": y} for x, y in points]),
+        "quantity_per_point": "1",
+    }
+    data.update(extra)
+    return client.post(f"/beds/{bed_id}/cells/batch", data=data, follow_redirects=follow_redirects)
 
 
 def test_bed_detail_page_shows_seed_stock_variety_in_seed_palette(client):
@@ -1313,6 +1332,56 @@ def test_batch_plant_transplant_mode_rejects_missing_lot(client):
     variety_id = _create_variety(client)
     response = _stage_batch(client, bed_id, variety_id, [(0, 0)], source_type="transplant")
     assert response.status_code == 422
+
+
+def test_batch_plant_seed_mode_sets_quantity_per_point_on_each_row(client):
+    plot_id = _create_plot(client)
+    bed_id = _create_bed(client, plot_id)
+    variety_id = _create_variety(client)
+    client.post("/seed-lots", data={"variety_id": str(variety_id)})
+    _stage_batch(client, bed_id, variety_id, [(0, 0), (16, 0), (32, 0)], quantity_per_point="5")
+    assert [p["quantity"] for p in db.list_plantings_for_bed(bed_id)] == [5, 5, 5]
+
+
+def test_batch_plant_seed_mode_decrements_seed_lot_by_total(client):
+    plot_id = _create_plot(client)
+    bed_id = _create_bed(client, plot_id)
+    variety_id = _create_variety(client)
+    client.post("/seed-lots", data={"variety_id": str(variety_id), "quantity_on_hand": "50"})
+    lot_id = db.list_seed_lots()[0]["id"]
+    _stage_batch(client, bed_id, variety_id, [(0, 0), (16, 0), (32, 0)], quantity_per_point="5")
+    assert db.get_seed_lot(lot_id)["quantity_on_hand"] == 35
+
+
+def test_batch_plant_seed_mode_rejects_missing_quantity_per_point(client):
+    plot_id = _create_plot(client)
+    bed_id = _create_bed(client, plot_id)
+    variety_id = _create_variety(client)
+    client.post("/seed-lots", data={"variety_id": str(variety_id)})
+    response = _stage_batch(client, bed_id, variety_id, [(0, 0)], quantity_per_point="")
+    assert response.status_code == 422
+
+
+def test_batch_plant_seed_mode_rejects_zero_quantity_per_point(client):
+    plot_id = _create_plot(client)
+    bed_id = _create_bed(client, plot_id)
+    variety_id = _create_variety(client)
+    client.post("/seed-lots", data={"variety_id": str(variety_id)})
+    response = _stage_batch(client, bed_id, variety_id, [(0, 0)], quantity_per_point="0")
+    assert response.status_code == 422
+
+
+def test_batch_plant_transplant_mode_ignores_quantity_per_point(client):
+    plot_id = _create_plot(client)
+    bed_id = _create_bed(client, plot_id)
+    variety_id = _create_variety(client)
+    client.post("/transplant-lots", data={"variety_id": str(variety_id), "quantity_on_hand": "5"})
+    lot_id = db.list_transplant_lots()[0]["id"]
+    _stage_batch(
+        client, bed_id, variety_id, [(0, 0)], source_type="transplant",
+        transplant_lot_id=str(lot_id), quantity_per_point="5",
+    )
+    assert db.list_plantings_for_bed(bed_id)[0]["quantity"] == 1
 
 
 def test_update_transplant_lot_quantity_route_returns_204(client):

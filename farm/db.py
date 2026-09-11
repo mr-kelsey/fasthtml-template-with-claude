@@ -784,10 +784,12 @@ class FarmDatabaseMixin:
         transplant_lot_id: int = None,
         soil_temp_f: float = None,
         shade_warnings=None,
+        quantity_per_point: int = 1,
     ):
-        """Inserts one plantings row (quantity=1 -- a lattice stamp is one plant) per (x_in, y_in) in points,
-        all in one transaction. Decrements transplant_lots.quantity_on_hand by len(points) once when
-        transplant_lot_id is given, and regenerates the batch's (variety, planted_date) group's farm_events
+        """Inserts one plantings row (quantity=quantity_per_point) per (x_in, y_in) in points, all in one
+        transaction. Decrements transplant_lots.quantity_on_hand by len(points) once when transplant_lot_id
+        is given, or -- in seed mode -- draws down the variety's seed_lots by len(points) * quantity_per_point
+        (see _decrement_seed_stock), and regenerates the batch's (variety, planted_date) group's farm_events
         once at the end rather than once per point -- every point shares the same variety_id/planted_date,
         so one regen call covers the whole batch.
         shade_warnings, when given, is a parallel list of bools (same order/length as points) snapshotting
@@ -803,12 +805,12 @@ class FarmDatabaseMixin:
                     text(
                         "INSERT INTO plantings (variety_id, bed_id, planted_date, quantity, x_in, y_in, "
                         "source_type, transplant_lot_id, soil_temp_f, shade_warning) "
-                        "VALUES (:variety_id, :bed_id, :planted_date, 1, :x_in, :y_in, "
+                        "VALUES (:variety_id, :bed_id, :planted_date, :quantity, :x_in, :y_in, "
                         ":source_type, :transplant_lot_id, :soil_temp_f, :shade_warning)"
                     ),
                     {
                         "variety_id": variety_id, "bed_id": bed_id, "planted_date": planted_date,
-                        "x_in": x_in, "y_in": y_in, "source_type": source_type,
+                        "quantity": quantity_per_point, "x_in": x_in, "y_in": y_in, "source_type": source_type,
                         "transplant_lot_id": transplant_lot_id, "soil_temp_f": soil_temp_f,
                         "shade_warning": shade_warning,
                     },
@@ -821,8 +823,36 @@ class FarmDatabaseMixin:
                     ),
                     {"count": len(points), "id": transplant_lot_id},
                 )
+            elif source_type == "seed":
+                self._decrement_seed_stock(db_connection, variety_id, len(points) * quantity_per_point)
             self._regenerate_farm_events(db_connection, variety_id, planted_date)
         return planting_ids
+
+    def _decrement_seed_stock(self, db_connection, variety_id, count):
+        """Draws down seed_lots.quantity_on_hand for a variety, oldest acquired_date first (unknown-date lots
+        last, then by id) -- mirrors using your oldest seed packet first. Lots with a NULL (untracked)
+        quantity are skipped. Each lot is clamped at 0 rather than going negative: seed-lot gating is
+        existence-only (a batch may draw more seed than is precisely tracked), so any shortfall past the
+        last lot is simply not subtracted anywhere."""
+        lots = db_connection.execute(
+            text(
+                "SELECT id, quantity_on_hand FROM seed_lots WHERE variety_id = :variety_id "
+                "ORDER BY (acquired_date IS NULL), acquired_date ASC, id ASC"
+            ),
+            {"variety_id": variety_id},
+        ).mappings().all()
+        remaining = count
+        for lot in lots:
+            if remaining <= 0:
+                break
+            if lot["quantity_on_hand"] is None:
+                continue
+            taken = min(lot["quantity_on_hand"], remaining)
+            db_connection.execute(
+                text("UPDATE seed_lots SET quantity_on_hand = quantity_on_hand - :taken WHERE id = :id"),
+                {"taken": taken, "id": lot["id"]},
+            )
+            remaining -= taken
 
     def update_planting(
         self,
@@ -1140,8 +1170,22 @@ class FarmDatabaseMixin:
             )
 
     def delete_bed(self, bed_id: int):
+        "Deleting a bed also deletes the plantings in it -- they can't outlive the bed they're placed in."
         with self.engine.begin() as db_connection:
+            plantings_in_bed = db_connection.execute(
+                text("SELECT variety_id, planted_date FROM plantings WHERE bed_id = :bed_id"), {"bed_id": bed_id}
+            ).mappings().all()
+            db_connection.execute(
+                text(
+                    "DELETE FROM farm_events WHERE linked_planting_id IN "
+                    "(SELECT id FROM plantings WHERE bed_id = :bed_id)"
+                ),
+                {"bed_id": bed_id},
+            )
+            db_connection.execute(text("DELETE FROM plantings WHERE bed_id = :bed_id"), {"bed_id": bed_id})
             db_connection.execute(text("DELETE FROM beds WHERE id = :id"), {"id": bed_id})
+            for variety_id, planted_date in {(p["variety_id"], p["planted_date"]) for p in plantings_in_bed}:
+                self._regenerate_farm_events(db_connection, variety_id, planted_date)
 
     def list_beds(self):
         "Every bed across every plot, joined with its plot's name -- for the product-application form's bed picker."

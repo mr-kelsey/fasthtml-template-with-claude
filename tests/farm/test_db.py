@@ -628,6 +628,22 @@ def test_delete_nonexistent_bed_is_a_noop():
     assert db.list_beds_for_plot(999999) == []
 
 
+def test_delete_bed_also_deletes_its_plantings():
+    bed_id = _add_bed()
+    variety_id = _add_variety()
+    db.add_planting(variety_id, "2026-05-01", bed_id=bed_id)
+    db.delete_bed(bed_id)
+    assert db.list_plantings() == []
+
+
+def test_delete_bed_removes_generated_events_for_its_plantings():
+    bed_id = _add_bed()
+    variety_id = _add_variety(days_to_maturity_min=60, days_to_maturity_max=70)
+    db.add_planting(variety_id, "2026-05-01", bed_id=bed_id)
+    db.delete_bed(bed_id)
+    assert db.list_farm_events_in_range(*ALL_TIME) == []
+
+
 def _add_bed(plot_id=None, width_ft=4, length_ft=8, label="Bed 1"):
     plot_id = plot_id or _add_plot()
     db.add_bed(plot_id, label, width_ft, length_ft)
@@ -1036,6 +1052,14 @@ def test_batch_add_plantings_sets_quantity_one_per_point():
     db.batch_add_plantings(variety_id, "2026-05-01", bed_id, "seed", [(0, 0)])
     assert db.list_plantings_for_bed(bed_id)[0]["quantity"] == 1
 
+
+def test_batch_add_plantings_sets_quantity_to_quantity_per_point():
+    variety_id = _add_variety()
+    bed_id = _add_bed()
+    db.batch_add_plantings(variety_id, "2026-05-01", bed_id, "seed", [(0, 0), (16, 0)], quantity_per_point=5)
+    assert [p["quantity"] for p in db.list_plantings_for_bed(bed_id)] == [5, 5]
+
+
 def test_batch_add_plantings_returns_new_planting_ids():
     variety_id = _add_variety()
     bed_id = _add_bed()
@@ -1054,14 +1078,54 @@ def test_batch_add_plantings_decrements_transplant_lot_by_batch_count():
     assert db.get_transplant_lot(lot_id)["quantity_on_hand"] == 8
 
 
-def test_batch_add_plantings_leaves_seed_lot_untouched():
-    "Existence-only gating for seed mode -- batch planting never decrements a seed_lots quantity."
+def test_batch_add_plantings_decrements_seed_lot_by_points_times_quantity_per_point():
     variety_id = _add_variety()
     bed_id = _add_bed()
     db.add_seed_lot(variety_id, quantity_on_hand=50)
     lot_id = db.list_seed_lots_for_variety(variety_id)[0]["id"]
-    db.batch_add_plantings(variety_id, "2026-05-01", bed_id, "seed", [(0, 0)])
+    db.batch_add_plantings(variety_id, "2026-05-01", bed_id, "seed", [(0, 0), (16, 0), (32, 0)], quantity_per_point=5)
+    assert db.get_seed_lot(lot_id)["quantity_on_hand"] == 35
+
+
+def test_batch_add_plantings_leaves_seed_lot_untouched_in_transplant_mode():
+    variety_id = _add_variety()
+    bed_id = _add_bed()
+    db.add_seed_lot(variety_id, quantity_on_hand=50)
+    lot_id = db.list_seed_lots_for_variety(variety_id)[0]["id"]
+    db.add_transplant_lot(variety_id, quantity_on_hand=5)
+    transplant_lot_id = db.list_transplant_lots_for_variety(variety_id)[0]["id"]
+    db.batch_add_plantings(variety_id, "2026-05-01", bed_id, "transplant", [(0, 0)], transplant_lot_id=transplant_lot_id)
     assert db.get_seed_lot(lot_id)["quantity_on_hand"] == 50
+
+
+def test_batch_add_plantings_decrements_oldest_seed_lot_first():
+    variety_id = _add_variety()
+    bed_id = _add_bed()
+    db.add_seed_lot(variety_id, quantity_on_hand=3, acquired_date="2025-01-01")
+    db.add_seed_lot(variety_id, quantity_on_hand=10, acquired_date="2026-01-01")
+    lots = {lot["acquired_date"]: lot["id"] for lot in db.list_seed_lots_for_variety(variety_id)}
+    db.batch_add_plantings(variety_id, "2026-05-01", bed_id, "seed", [(0, 0)], quantity_per_point=5)
+    old_lot = db.get_seed_lot(lots["2025-01-01"])
+    new_lot = db.get_seed_lot(lots["2026-01-01"])
+    assert (old_lot["quantity_on_hand"], new_lot["quantity_on_hand"]) == (0, 8)
+
+
+def test_batch_add_plantings_clamps_seed_lot_at_zero_when_insufficient():
+    variety_id = _add_variety()
+    bed_id = _add_bed()
+    db.add_seed_lot(variety_id, quantity_on_hand=2)
+    lot_id = db.list_seed_lots_for_variety(variety_id)[0]["id"]
+    db.batch_add_plantings(variety_id, "2026-05-01", bed_id, "seed", [(0, 0)], quantity_per_point=5)
+    assert db.get_seed_lot(lot_id)["quantity_on_hand"] == 0
+
+
+def test_batch_add_plantings_skips_seed_lot_with_untracked_quantity():
+    variety_id = _add_variety()
+    bed_id = _add_bed()
+    db.add_seed_lot(variety_id, quantity_on_hand=None)
+    lot_id = db.list_seed_lots_for_variety(variety_id)[0]["id"]
+    db.batch_add_plantings(variety_id, "2026-05-01", bed_id, "seed", [(0, 0)], quantity_per_point=5)
+    assert db.get_seed_lot(lot_id)["quantity_on_hand"] is None
 
 
 def test_batch_add_plantings_regenerates_bed_farm_events_once():

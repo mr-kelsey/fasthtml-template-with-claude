@@ -6,7 +6,13 @@ from fasthtml.svg import Svg, Rect, Circle, G, Defs, Pattern, Path
 
 from farm import geometry
 from farm.layout import layout
-from farm.helpers import parse_optional_int, parse_optional_float, parse_required_float, compute_window
+from farm.helpers import (
+    parse_optional_int,
+    parse_optional_float,
+    parse_required_int,
+    parse_required_float,
+    compute_window,
+)
 import db
 
 router = fast.APIRouter()
@@ -325,8 +331,6 @@ def update_planting_route(
         source_type=existing["source_type"],
         soil_temp_f=existing["soil_temp_f"],
     )
-    if existing["bed_id"] is not None:
-        return fast.Redirect(f"/beds/{existing['bed_id']}")
     return fast.Redirect("/plantings")
 
 
@@ -405,8 +409,6 @@ def delete_planting_route(planting_id: int):
     if planting is None:
         return fast.Redirect("/plantings")
     db.delete_planting(planting_id)
-    if planting["bed_id"] is not None:
-        return fast.Redirect(f"/beds/{planting['bed_id']}")
     return fast.Redirect("/plantings")
 
 
@@ -577,6 +579,12 @@ def _batch_plant_form(bed_id):
             value=date.today().isoformat(),
         ),
         fast.Input(name="soil_temp_f", type="number", step="0.1", placeholder="Soil temp (F, optional)"),
+        fast.Label(
+            "Seeds per location:",
+            fast.Input(type="number", min="1", name="quantity_per_point", id="batch-quantity-per-point"),
+            id="batch-quantity-per-point-wrap",
+            hidden=True,
+        ),
         fast.Select(fast.Option("Choose a transplant lot", value=""), name="transplant_lot_id", id="batch-transplant-lot-select", hidden=True),
         fast.Label(
             "On hand in this lot:",
@@ -722,6 +730,7 @@ def batch_plant_route(
     points: str,
     soil_temp_f: str = "",
     transplant_lot_id: str = "",
+    quantity_per_point: str = "1",
 ):
     "Stamps a batch of staged lattice points for one variety into the bed in one submission."
     bed = db.get_bed(bed_id)
@@ -745,9 +754,15 @@ def batch_plant_route(
     if not ok:
         return fast.Response("Soil temp must be a number.", status_code=422)
     validated_transplant_lot_id = None
+    quantity_per_point_value = 1
     if source_type == "seed":
         if not db.list_seed_lots_for_variety(variety_id):
             return fast.Response("This variety has no seed lots on hand.", status_code=422)
+        quantity_per_point_value, error = parse_required_int(quantity_per_point, "Seeds per location")
+        if error:
+            return fast.Response(error, status_code=422)
+        if quantity_per_point_value < 1:
+            return fast.Response("Seeds per location must be at least 1.", status_code=422)
     else:
         ok, lot_id = parse_optional_int(transplant_lot_id)
         if not ok or lot_id is None:
@@ -763,7 +778,7 @@ def batch_plant_route(
     db.batch_add_plantings(
         variety_id, planted_date, bed_id, source_type, parsed_points,
         transplant_lot_id=validated_transplant_lot_id, soil_temp_f=soil_temp_f_value,
-        shade_warnings=shade_warnings,
+        shade_warnings=shade_warnings, quantity_per_point=quantity_per_point_value,
     )
     return fast.Redirect(f"/beds/{bed_id}")
 
