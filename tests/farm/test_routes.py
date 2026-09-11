@@ -236,6 +236,17 @@ def test_seed_varieties_page_shows_no_companion_rules_yet_when_none_exist(client
     assert "No companion/antagonist rules yet" in response.text
 
 
+def test_seed_varieties_page_offers_common_names_as_companion_rule_dropdown_options(client):
+    client.post(
+        "/seed-varieties", data={"common_name": "Tomato", "name": "Cherokee Purple", "plant_family": "Solanaceae"}
+    )
+    client.post("/seed-varieties", data={"common_name": "Basil", "name": "Genovese", "plant_family": "Lamiaceae"})
+    response = client.get("/seed-varieties")
+    assert '<option value="Tomato">Tomato</option>' in response.text
+    assert '<option value="Basil">Basil</option>' in response.text
+    assert "plant_a_common_name" in response.text and "<select" in response.text
+
+
 def test_add_companion_rule_redirects_with_303(client):
     response = client.post(
         "/companion-rules",
@@ -1155,6 +1166,13 @@ def test_bed_detail_page_shows_bed_label(client):
     bed_id = _create_bed(client, plot_id, label="Tomato Bed")
     response = client.get(f"/beds/{bed_id}")
     assert "Tomato Bed" in response.text
+
+
+def test_bed_detail_page_shows_land_plot_name(client):
+    plot_id = _create_plot(client, name="Back Field")
+    bed_id = _create_bed(client, plot_id, label="Bed 2")
+    response = client.get(f"/beds/{bed_id}")
+    assert "Back Field-Bed 2" in response.text
 
 
 def _stage_batch(client, bed_id, variety_id, points, source_type="seed", planted_date="2026-05-01", follow_redirects=True, **extra):

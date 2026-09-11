@@ -30,6 +30,8 @@
     var lot_quantity_wrap = document.getElementById("armed-lot-quantity-wrap");
     var lot_quantity_input = document.getElementById("armed-lot-quantity-input");
     var grid_offset_controls = document.getElementById("grid-offset-controls");
+    var zoom_controls = document.getElementById("zoom-controls");
+    var zoom_display = document.getElementById("zoom-level-display");
 
     var SVG_NS = "http://www.w3.org/2000/svg";
     var DEFAULT_SPACING_IN = 12; // fallback lattice spacing for a variety with no spacing_in set
@@ -430,6 +432,35 @@
                     data.grid_offset_y_in = result.grid_offset_y_in;
                     render_lattice();
                 });
+        });
+    }
+
+    var ZOOM_MIN_PCT = 50, ZOOM_MAX_PCT = 400, ZOOM_STEP_PCT = 25;
+    var zoom_pct = 100;
+    var base_px_per_in = null; // the SVG's natural "fit" scale, captured lazily on first zoom
+
+    function apply_zoom() {
+        if (zoom_pct === 100) {
+            svg.style.width = "";
+            svg.style.height = "";
+        } else {
+            if (base_px_per_in === null) base_px_per_in = svg.getBoundingClientRect().width / data.width_in;
+            var px_per_in = base_px_per_in * (zoom_pct / 100);
+            svg.style.width = (data.width_in * px_per_in) + "px";
+            svg.style.height = (data.length_in * px_per_in) + "px";
+        }
+        if (zoom_display) zoom_display.textContent = zoom_pct + "%";
+    }
+
+    if (zoom_controls) {
+        zoom_controls.addEventListener("click", function (e) {
+            var button = e.target.closest("button");
+            if (!button) return;
+            var action = button.getAttribute("data-zoom");
+            if (action === "in") zoom_pct = Math.min(ZOOM_MAX_PCT, zoom_pct + ZOOM_STEP_PCT);
+            else if (action === "out") zoom_pct = Math.max(ZOOM_MIN_PCT, zoom_pct - ZOOM_STEP_PCT);
+            else zoom_pct = 100;
+            apply_zoom();
         });
     }
 

@@ -336,3 +336,33 @@ def test_grid_offset_persists_after_reload(page, live_server_url):
     _arm_seed_variety(page, variety_id)
     xs = page.locator("#lattice-layer circle").evaluate_all("els => els.map(el => el.getAttribute('cx')).sort()")
     assert xs[0] == "1"
+
+
+def test_clicking_zoom_in_sets_an_explicit_pixel_width_on_the_svg(page, live_server_url):
+    bed_id = _make_bed(width_ft=2, length_ft=2)
+    page.goto(f"{live_server_url}/beds/{bed_id}")
+
+    page.locator('#zoom-controls button[data-zoom="in"]').click()
+
+    style_width = page.locator("#bed-detail-svg").evaluate("el => el.style.width")
+    assert style_width.endswith("px")
+
+
+def test_zoom_level_display_reflects_the_current_percentage(page, live_server_url):
+    bed_id = _make_bed(width_ft=2, length_ft=2)
+    page.goto(f"{live_server_url}/beds/{bed_id}")
+
+    page.locator('#zoom-controls button[data-zoom="in"]').click()
+
+    assert page.locator("#zoom-level-display").inner_text() == "125%"
+
+
+def test_clicking_zoom_reset_clears_the_explicit_pixel_size(page, live_server_url):
+    bed_id = _make_bed(width_ft=2, length_ft=2)
+    page.goto(f"{live_server_url}/beds/{bed_id}")
+    page.locator('#zoom-controls button[data-zoom="in"]').click()
+
+    page.locator('#zoom-controls button[data-zoom="reset"]').click()
+
+    style_width = page.locator("#bed-detail-svg").evaluate("el => el.style.width")
+    assert style_width == ""

@@ -161,10 +161,19 @@ def _variety_row(variety):
     )
 
 
-def _companion_rule_form():
+def _common_name_select(name, common_names):
+    return fast.Select(
+        fast.Option("Choose a plant", value="", selected=True),
+        *[fast.Option(common_name, value=common_name) for common_name in common_names],
+        name=name,
+        required=True,
+    )
+
+
+def _companion_rule_form(common_names):
     return fast.Form(
-        fast.Input(name="plant_a_common_name", placeholder="Plant A (common name)", required=True),
-        fast.Input(name="plant_b_common_name", placeholder="Plant B (common name)", required=True),
+        _common_name_select("plant_a_common_name", common_names),
+        _common_name_select("plant_b_common_name", common_names),
         fast.Select(
             fast.Option("Relation", value="", selected=True),
             *[fast.Option(relation, value=relation) for relation in RELATION_OPTIONS],
@@ -222,6 +231,7 @@ def list_seed_varieties_page():
         ),
         cls="table-scroll",
     )
+    common_names = list(dict.fromkeys(v["common_name"] for v in varieties))
     rules = db.list_companion_rules()
     rule_headers = ["Plant A", "Plant B", "Relation", "Notes", ""]
     rule_rows = (
@@ -241,7 +251,7 @@ def list_seed_varieties_page():
         fast.H2("All varieties"),
         table,
         fast.H2("Companion / Antagonist Rules"),
-        _companion_rule_form(),
+        _companion_rule_form(common_names),
         rule_table,
     )
 

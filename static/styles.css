@@ -260,14 +260,19 @@ dialog#bed-dialog {
     align-items: flex-start;
 }
 
-.bed-detail-svg {
-    display: block;
-    width: 100%;
+.bed-detail-canvas-wrap {
+    overflow: auto;
     max-width: 40rem;
     height: 60vh;
     border: 1px solid var(--pico-muted-border-color);
     border-radius: var(--pico-border-radius);
     background-color: var(--pico-card-sectioning-background-color);
+}
+
+.bed-detail-svg {
+    display: block;
+    width: 100%;
+    height: 100%;
 }
 
 .bed-detail-sidebar {
@@ -313,7 +318,17 @@ dialog#bed-dialog {
 }
 
 .lattice-point {
-    fill: var(--pico-muted-border-color);
+    /* Outline only, not filled -- at tight spacing (e.g. 1in) adjacent lattice points'
+       fixed-radius circles overlap so much that a solid fill leaves no visible gaps at
+       any zoom level, hiding the grid/boundary/planted dots underneath entirely. An
+       unfilled ring keeps the same click target while letting those show through. */
+    fill: none;
+    /* Without this, an unfilled circle's transparent interior doesn't capture pointer
+       events -- clicks inside the ring would pass through to whatever's drawn under it
+       (the bed-boundary rect, the grid background). */
+    pointer-events: all;
+    stroke: var(--pico-muted-border-color);
+    stroke-width: 0.4;
     cursor: pointer;
 }
 

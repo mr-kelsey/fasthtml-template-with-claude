@@ -588,11 +588,24 @@ def _grid_offset_controls():
     )
 
 
+def _zoom_controls():
+    "Zoom the bed canvas in/out -- see bed-detail.js's zoom listener. Purely a rendering scale; no geometry changes."
+    return fast.Div(
+        fast.Button("−", type="button", data_zoom="out", title="Zoom out"),
+        fast.Span("100%", id="zoom-level-display"),
+        fast.Button("+", type="button", data_zoom="in", title="Zoom in"),
+        fast.Button("Reset", type="button", data_zoom="reset", title="Reset zoom"),
+        id="zoom-controls",
+        title="Zoom the bed canvas",
+    )
+
+
 @router("/beds/{bed_id}", methods=["get"])
 def bed_detail_page(bed_id: int):
     bed = db.get_bed(bed_id)
     if bed is None:
         return fast.Response("Bed not found.", status_code=404)
+    plot = db.get_land_plot(bed["plot_id"])
     plantings = db.list_plantings_for_bed(bed_id)
     seed_stock_varieties = db.list_seed_varieties_with_seed_stock()
     transplant_stock_varieties = db.list_seed_varieties_with_transplant_stock()
@@ -646,14 +659,15 @@ def bed_detail_page(bed_id: int):
         "Shade as of:", fast.Input(type="date", id="shade-date", value=date.today().isoformat())
     )
     return layout(
-        f"{bed['label']} Detail",
-        fast.H1(f"{bed['label']} ({bed['width_ft']} x {bed['length_ft']} ft)"),
+        f"{plot['name']}-{bed['label']} Detail",
+        fast.H1(f"{plot['name']}-{bed['label']} ({bed['width_ft']} x {bed['length_ft']} ft)"),
         fast.A("Back to plot map", href=f"/land-plots/{bed['plot_id']}/map"),
         edit_bed_button,
         shade_date_picker,
         _grid_offset_controls(),
+        _zoom_controls(),
         fast.Script(json.dumps(data), type="application/json", id="bed-detail-data"),
-        fast.Div(canvas, palette, cls="bed-detail-layout"),
+        fast.Div(fast.Div(canvas, id="bed-canvas-wrap", cls="bed-detail-canvas-wrap"), palette, cls="bed-detail-layout"),
         _batch_plant_form(bed_id),
         fast.Dialog(fast.Div(id="bed-dialog-body"), id="bed-dialog"),
         fast.Script(src="/bed-detail.js"),
