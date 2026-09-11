@@ -286,3 +286,53 @@ def test_shade_warning_marker_appears_for_a_full_sun_variety_in_full_shade(page,
 
     warned = page.locator('#lattice-layer circle[cx="0"][cy="0"]')
     assert "shade-warning" in warned.get_attribute("class")
+
+
+def test_shade_warning_marker_appears_without_manually_setting_planted_date(page, live_server_url):
+    "Regression test: batch-planted-date used to have no default, so fetch_shade_warnings never fired until the gardener manually touched the date field -- it now defaults to today, matching the shade-date picker."
+    plot_id, bed_id = _make_bed_with_plot(width_ft=2, length_ft=2)  # 24in x 24in
+    db.add_seed_variety(
+        "Lettuce", "Buttercrunch", "Asteraceae", spacing_in=8, sun_needs="full_sun",
+        days_to_maturity_min=1, days_to_maturity_max=5, color_hex="#00ff00",
+    )
+    variety_id = db.list_seed_varieties()[0]["id"]
+    _add_seed_lot(variety_id)
+    db.add_shade_source(plot_id, "Oak tree")
+    source_id = db.list_shade_sources_for_plot(plot_id)[0]["id"]
+    db.save_shade_polygon(source_id, "summer_solstice", "full", _FULL_COVERAGE_SQUARE)
+
+    page.goto(f"{live_server_url}/beds/{bed_id}")
+    with page.expect_response(lambda r: "/shade-warnings" in r.url):
+        _arm_seed_variety(page, variety_id)
+
+    warned = page.locator('#lattice-layer circle[cx="0"][cy="0"]')
+    assert "shade-warning" in warned.get_attribute("class")
+
+
+def test_clicking_right_arrow_shifts_the_lattice_one_inch(page, live_server_url):
+    bed_id = _make_bed(width_ft=2, length_ft=2)
+    variety_id = _make_variety(spacing_in=8)
+    _add_seed_lot(variety_id)
+
+    page.goto(f"{live_server_url}/beds/{bed_id}")
+    _arm_seed_variety(page, variety_id)
+    with page.expect_response(lambda r: "/grid-offset" in r.url):
+        page.locator('#grid-offset-controls button[data-dx-in="1"]').click()
+
+    xs = page.locator("#lattice-layer circle").evaluate_all("els => els.map(el => el.getAttribute('cx')).sort()")
+    assert xs[0] == "1"
+
+
+def test_grid_offset_persists_after_reload(page, live_server_url):
+    bed_id = _make_bed(width_ft=2, length_ft=2)
+    variety_id = _make_variety(spacing_in=8)
+    _add_seed_lot(variety_id)
+
+    page.goto(f"{live_server_url}/beds/{bed_id}")
+    with page.expect_response(lambda r: "/grid-offset" in r.url):
+        page.locator('#grid-offset-controls button[data-dx-in="1"]').click()
+
+    page.reload()
+    _arm_seed_variety(page, variety_id)
+    xs = page.locator("#lattice-layer circle").evaluate_all("els => els.map(el => el.getAttribute('cx')).sort()")
+    assert xs[0] == "1"

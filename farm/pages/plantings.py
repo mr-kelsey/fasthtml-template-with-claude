@@ -106,8 +106,20 @@ def _planting_form(action, submit_label, varieties, planting=None):
     )
 
 
+def _bed_location_cell(planting):
+    "Plot/bed/in-bed position for a bed-placed planting -- blank for one recorded against free-text location only."
+    if planting["bed_id"] is None:
+        return ""
+    label = f"{planting['plot_name']} / {planting['bed_label']}"
+    if planting["x_in"] is None or planting["y_in"] is None:
+        return label
+    return fast.Div(label, fast.Div(f"{planting['x_in']:g}in, {planting['y_in']:g}in", cls="bed-position"))
+
+
 def _planting_row(planting, warnings):
-    row_warnings = warnings.get(planting["id"], [])
+    row_warnings = list(warnings.get(planting["id"], []))
+    if planting["shade_warning"]:
+        row_warnings.append("Shade risk before maturity")
     germination_window = compute_window(planting["planted_date"], planting["germination_days_min"], planting["germination_days_max"])
     harvest_window = compute_window(planting["planted_date"], planting["days_to_maturity_min"], planting["days_to_maturity_max"])
     return fast.Tr(
@@ -115,6 +127,7 @@ def _planting_row(planting, warnings):
         fast.Td(planting["common_name"] or ""),
         fast.Td(planting["planted_date"]),
         fast.Td(planting["location"] or ""),
+        fast.Td(_bed_location_cell(planting)),
         fast.Td(planting["quantity"] if planting["quantity"] is not None else ""),
         fast.Td(planting["quantity_germinated"] if planting["quantity_germinated"] is not None else ""),
         fast.Td(_format_window(germination_window)),
@@ -137,7 +150,7 @@ def list_plantings_page():
     plantings = db.list_plantings()
     warnings = _overlap_warnings(plantings)
     headers = [
-        "Variety", "Common Name", "Planted", "Location", "Qty", "Germinated",
+        "Variety", "Common Name", "Planted", "Location", "Bed", "Qty", "Germinated",
         "Germination window", "Harvest window", "Warnings", "",
     ]
     rows = (
@@ -500,6 +513,8 @@ def _bed_detail_data(bed, plantings, seed_stock_varieties, transplant_stock_vari
         "bed_id": bed["id"],
         "width_in": bed["width_ft"] * 12,
         "length_in": bed["length_ft"] * 12,
+        "grid_offset_x_in": bed["grid_offset_x_in"],
+        "grid_offset_y_in": bed["grid_offset_y_in"],
         "plantings": [
             {
                 "id": p["id"], "variety_id": p["variety_id"], "common_name": p["common_name"],
@@ -539,7 +554,10 @@ def _batch_plant_form(bed_id):
         fast.Input(type="hidden", name="source_type", id="batch-source-type"),
         fast.Input(type="hidden", name="points", id="batch-points"),
         fast.Div(id="batch-staged-count"),
-        fast.Input(name="planted_date", type="date", id="batch-planted-date", required=True),
+        fast.Input(
+            name="planted_date", type="date", id="batch-planted-date", required=True,
+            value=date.today().isoformat(),
+        ),
         fast.Input(name="soil_temp_f", type="number", step="0.1", placeholder="Soil temp (F, optional)"),
         fast.Select(fast.Option("Choose a transplant lot", value=""), name="transplant_lot_id", id="batch-transplant-lot-select", hidden=True),
         fast.Label(
@@ -553,6 +571,20 @@ def _batch_plant_form(bed_id):
         action=f"/beds/{bed_id}/cells/batch",
         id="batch-plant-form",
         hidden=True,
+    )
+
+
+def _grid_offset_controls():
+    "Four one-inch nudge buttons for the fencepost lattice's origin -- see bed-detail.js's grid-offset listener."
+    return fast.Div(
+        fast.Button("↑", type="button", data_dx_in="0", data_dy_in="-1", title="Shift grid up 1in"),
+        fast.Div(
+            fast.Button("←", type="button", data_dx_in="-1", data_dy_in="0", title="Shift grid left 1in"),
+            fast.Button("→", type="button", data_dx_in="1", data_dy_in="0", title="Shift grid right 1in"),
+        ),
+        fast.Button("↓", type="button", data_dx_in="0", data_dy_in="1", title="Shift grid down 1in"),
+        id="grid-offset-controls",
+        title="Shift the planting grid",
     )
 
 
@@ -619,6 +651,7 @@ def bed_detail_page(bed_id: int):
         fast.A("Back to plot map", href=f"/land-plots/{bed['plot_id']}/map"),
         edit_bed_button,
         shade_date_picker,
+        _grid_offset_controls(),
         fast.Script(json.dumps(data), type="application/json", id="bed-detail-data"),
         fast.Div(canvas, palette, cls="bed-detail-layout"),
         _batch_plant_form(bed_id),
@@ -692,9 +725,12 @@ def batch_plant_route(
         if lot["quantity_on_hand"] is None or len(parsed_points) > lot["quantity_on_hand"]:
             return fast.Response("Not enough transplants on hand in that lot.", status_code=422)
         validated_transplant_lot_id = lot_id
+    variety = db.get_seed_variety(variety_id)
+    shade_warnings = _shade_warnings_for_points(bed, variety, planted_date, parsed_points)
     db.batch_add_plantings(
         variety_id, planted_date, bed_id, source_type, parsed_points,
         transplant_lot_id=validated_transplant_lot_id, soil_temp_f=soil_temp_f_value,
+        shade_warnings=shade_warnings,
     )
     return fast.Redirect(f"/beds/{bed_id}")
 
@@ -710,6 +746,19 @@ def _load_shade_polygons(plot_id):
             "points": [tuple(p) for p in json.loads(r["points"])],
         }
         for r in rows
+    ]
+
+
+def _shade_warnings_for_points(bed, variety, planted_date_str, parsed_points):
+    """One geometry.shade_exceeds_tolerance check per point, in point order -- shared by the live staging-time
+    route below and batch_plant_route, which snapshots the result onto each new planting."""
+    planted = _parse_date_or_none(planted_date_str)
+    window = compute_window(planted_date_str, variety["days_to_maturity_min"], variety["days_to_maturity_max"])
+    maturity_end = window[1] if window else planted
+    shade_polygons = _load_shade_polygons(bed["plot_id"])
+    return [
+        geometry.shade_exceeds_tolerance(bed, x_in, y_in, planted, maturity_end, variety["sun_needs"], shade_polygons)
+        for x_in, y_in in parsed_points
     ]
 
 
@@ -747,11 +796,25 @@ def bed_shade_warnings_route(bed_id: int, variety_id: str, planted_date: str, po
     parsed_points, error = _validate_points(points, width_in, length_in)
     if error:
         return fast.Response(error, status_code=422)
-    window = compute_window(planted_date, variety["days_to_maturity_min"], variety["days_to_maturity_max"])
-    maturity_end = window[1] if window else planted
-    shade_polygons = _load_shade_polygons(bed["plot_id"])
-    warnings = [
-        geometry.shade_exceeds_tolerance(bed, x_in, y_in, planted, maturity_end, variety["sun_needs"], shade_polygons)
-        for x_in, y_in in parsed_points
-    ]
+    warnings = _shade_warnings_for_points(bed, variety, planted_date, parsed_points)
     return fast.Response(json.dumps({"warnings": warnings}), media_type="application/json")
+
+
+@router("/beds/{bed_id}/grid-offset", methods=["post"])
+def shift_bed_grid_offset_route(bed_id: int, dx_in: str, dy_in: str):
+    "Nudges the bed's lattice origin by exactly one inch along one axis per click -- see the arrow buttons in bed_detail_page."
+    bed = db.get_bed(bed_id)
+    if bed is None:
+        return fast.Response("Bed not found.", status_code=404)
+    ok_dx, dx = parse_optional_float(dx_in)
+    ok_dy, dy = parse_optional_float(dy_in)
+    if not ok_dx or not ok_dy or dx is None or dy is None:
+        return fast.Response("Invalid offset.", status_code=422)
+    if dx not in (-1, 0, 1) or dy not in (-1, 0, 1) or (dx == 0) == (dy == 0):
+        return fast.Response("Offset must nudge exactly one axis by exactly one inch.", status_code=422)
+    db.shift_bed_grid_offset(bed_id, dx, dy)
+    updated = db.get_bed(bed_id)
+    return fast.Response(
+        json.dumps({"grid_offset_x_in": updated["grid_offset_x_in"], "grid_offset_y_in": updated["grid_offset_y_in"]}),
+        media_type="application/json",
+    )

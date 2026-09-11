@@ -29,6 +29,7 @@
     var lot_select = document.getElementById("batch-transplant-lot-select");
     var lot_quantity_wrap = document.getElementById("armed-lot-quantity-wrap");
     var lot_quantity_input = document.getElementById("armed-lot-quantity-input");
+    var grid_offset_controls = document.getElementById("grid-offset-controls");
 
     var SVG_NS = "http://www.w3.org/2000/svg";
     var DEFAULT_SPACING_IN = 12; // fallback lattice spacing for a variety with no spacing_in set
@@ -98,11 +99,19 @@
         return false;
     }
 
-    function lattice_points(spacing_in) {
+    function lattice_start(offset_in, spacing_in) {
+        // Normalizes the stored offset (which can be any accumulated inch value, positive or negative)
+        // into [0, spacing_in) so the lattice shifts visually without ever starting outside the bed.
+        return ((offset_in % spacing_in) + spacing_in) % spacing_in;
+    }
+
+    function lattice_points(spacing_in, offset_x_in, offset_y_in) {
         var points = [];
         if (!spacing_in || spacing_in <= 0) return points;
-        for (var x = 0; x <= data.width_in + 1e-6; x += spacing_in) {
-            for (var y = 0; y <= data.length_in + 1e-6; y += spacing_in) {
+        var start_x = lattice_start(offset_x_in || 0, spacing_in);
+        var start_y = lattice_start(offset_y_in || 0, spacing_in);
+        for (var x = start_x; x <= data.width_in + 1e-6; x += spacing_in) {
+            for (var y = start_y; y <= data.length_in + 1e-6; y += spacing_in) {
                 points.push({ x_in: Math.min(x, data.width_in), y_in: Math.min(y, data.length_in) });
             }
         }
@@ -269,7 +278,7 @@
         clear_children(staged_layer);
         if (state.armed_variety) {
             var spacing_in = state.armed_variety.spacing_in || DEFAULT_SPACING_IN;
-            lattice_points(spacing_in).forEach(function (point) {
+            lattice_points(spacing_in, data.grid_offset_x_in, data.grid_offset_y_in).forEach(function (point) {
                 var blocked = is_blocked(point, state.armed_variety.id, spacing_in);
                 var circle = make_circle(point.x_in, point.y_in, 2, "lattice-point" + (blocked ? " blocked" : ""));
                 if (!blocked) {
@@ -401,6 +410,26 @@
                 }
             }
             batch_points_input.value = JSON.stringify(state.staged_points);
+        });
+    }
+
+    if (grid_offset_controls) {
+        grid_offset_controls.addEventListener("click", function (e) {
+            var button = e.target.closest("button");
+            if (!button) return;
+            post("/beds/" + data.bed_id + "/grid-offset", {
+                dx_in: button.getAttribute("data-dx-in"),
+                dy_in: button.getAttribute("data-dy-in"),
+            })
+                .then(function (response) {
+                    return response.ok ? response.json() : null;
+                })
+                .then(function (result) {
+                    if (!result) return;
+                    data.grid_offset_x_in = result.grid_offset_x_in;
+                    data.grid_offset_y_in = result.grid_offset_y_in;
+                    render_lattice();
+                });
         });
     }
 

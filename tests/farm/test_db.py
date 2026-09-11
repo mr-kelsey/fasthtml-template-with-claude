@@ -410,6 +410,22 @@ def test_list_plantings_includes_maturity_from_variety_join():
     assert (planting["days_to_maturity_min"], planting["days_to_maturity_max"]) == (60, 80)
 
 
+def test_list_plantings_includes_bed_label_and_plot_name_when_bed_set():
+    plot_id = _add_plot(name="Back Field")
+    bed_id = _add_bed(plot_id=plot_id, label="Bed 2")
+    variety_id = _add_variety()
+    db.batch_add_plantings(variety_id, "2026-05-01", bed_id, "seed", [(0, 0)])
+    planting = db.list_plantings()[0]
+    assert (planting["plot_name"], planting["bed_label"]) == ("Back Field", "Bed 2")
+
+
+def test_list_plantings_bed_label_and_plot_name_are_none_for_free_text_location():
+    variety_id = _add_variety()
+    db.add_planting(variety_id, "2026-05-01", location="North corner")
+    planting = db.list_plantings()[0]
+    assert (planting["plot_name"], planting["bed_label"]) == (None, None)
+
+
 def test_get_planting_returns_matching_row():
     variety_id = _add_variety()
     db.add_planting(variety_id, "2026-05-01", quantity=10)
@@ -579,6 +595,24 @@ def test_update_bed_size_persists_dimensions():
     db.update_bed_size(bed_id, 6, 10)
     bed = db.get_bed(bed_id)
     assert (bed["width_ft"], bed["length_ft"]) == (6, 10)
+
+
+def test_add_bed_starts_with_zero_grid_offset():
+    plot_id = _add_plot()
+    db.add_bed(plot_id, "Bed 1", 4, 8)
+    bed = db.list_beds_for_plot(plot_id)[0]
+    assert (bed["grid_offset_x_in"], bed["grid_offset_y_in"]) == (0, 0)
+
+
+def test_shift_bed_grid_offset_accumulates_across_calls():
+    plot_id = _add_plot()
+    db.add_bed(plot_id, "Bed 1", 4, 8)
+    bed_id = db.list_beds_for_plot(plot_id)[0]["id"]
+    db.shift_bed_grid_offset(bed_id, 1, 0)
+    db.shift_bed_grid_offset(bed_id, 1, 0)
+    db.shift_bed_grid_offset(bed_id, 0, -1)
+    bed = db.get_bed(bed_id)
+    assert (bed["grid_offset_x_in"], bed["grid_offset_y_in"]) == (2, -1)
 
 
 def test_delete_bed_removes_it():
@@ -1044,6 +1078,22 @@ def test_batch_add_plantings_persists_source_type():
     lot_id = db.list_transplant_lots_for_variety(variety_id)[0]["id"]
     db.batch_add_plantings(variety_id, "2026-05-01", bed_id, "transplant", [(0, 0)], transplant_lot_id=lot_id)
     assert db.list_plantings_for_bed(bed_id)[0]["source_type"] == "transplant"
+
+
+def test_batch_add_plantings_persists_shade_warning_flag_per_point():
+    variety_id = _add_variety()
+    bed_id = _add_bed()
+    ids = db.batch_add_plantings(
+        variety_id, "2026-05-01", bed_id, "seed", [(0, 0), (16, 0)], shade_warnings=[True, False]
+    )
+    assert [bool(db.get_planting(pid)["shade_warning"]) for pid in ids] == [True, False]
+
+
+def test_batch_add_plantings_leaves_shade_warning_null_when_not_given():
+    variety_id = _add_variety()
+    bed_id = _add_bed()
+    ids = db.batch_add_plantings(variety_id, "2026-05-01", bed_id, "seed", [(0, 0)])
+    assert db.get_planting(ids[0])["shade_warning"] is None
 
 
 def test_batch_add_plantings_second_batch_of_same_variety_and_date_merges_into_shared_event():

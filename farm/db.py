@@ -178,6 +178,9 @@ SCHEMA_STATEMENTS = [
         UNIQUE (shade_source_id, season, shade_type)
     )
     """,
+    ("plantings", "shade_warning", "INTEGER"),
+    ("beds", "grid_offset_x_in", "REAL NOT NULL DEFAULT 0"),
+    ("beds", "grid_offset_y_in", "REAL NOT NULL DEFAULT 0"),
 ]
 
 _AGRONOMIC_COLUMNS = (
@@ -197,7 +200,7 @@ _SEED_VARIETY_COLUMNS = (
 
 _PLANTING_COLUMNS = (
     "id, variety_id, bed_id, location, planted_date, quantity, quantity_germinated, quantity_culled, notes, "
-    "x_in, y_in, seed_lot_id, transplant_lot_id, source_type, soil_temp_f, created_at"
+    "x_in, y_in, seed_lot_id, transplant_lot_id, source_type, soil_temp_f, shade_warning, created_at"
 )
 
 _HARVEST_COLUMNS = "id, planting_id, harvest_date, weight_lb, notes, created_at"
@@ -213,7 +216,10 @@ _COMPANION_RULE_COLUMNS = "id, plant_a_common_name, plant_b_common_name, relatio
 
 _LAND_PLOT_COLUMNS = "id, name, width_ft, length_ft, created_at"
 
-_BED_COLUMNS = "id, plot_id, label, x, y, width_ft, length_ft, rotation_deg, created_at"
+_BED_COLUMNS = (
+    "id, plot_id, label, x, y, width_ft, length_ft, rotation_deg, "
+    "grid_offset_x_in, grid_offset_y_in, created_at"
+)
 
 _GARDEN_PRODUCT_COLUMNS = (
     "id, name, product_type, npk_n, npk_p, npk_k, benefit_notes, application_frequency_days, created_at"
@@ -663,18 +669,23 @@ class FarmDatabaseMixin:
             db_connection.execute(text("DELETE FROM companion_rules WHERE id = :id"), {"id": rule_id})
 
     def list_plantings(self):
-        "Joined with seed_varieties so callers get the variety's common name and maturity data for expected-window math."
+        """Joined with seed_varieties so callers get the variety's common name and maturity data for expected-window
+        math, and with beds/land_plots so callers get the plot/bed a bed-placed planting actually lives in
+        (bed_label/plot_name are None for a planting with no bed_id, e.g. one recorded against free-text location)."""
         with self.engine.connect() as db_connection:
             return db_connection.execute(
                 text(
                     "SELECT p.id, p.variety_id, p.bed_id, p.location, p.planted_date, p.quantity, "
                     "p.quantity_germinated, p.notes, p.x_in, p.y_in, p.seed_lot_id, "
-                    "p.transplant_lot_id, p.source_type, p.created_at, "
+                    "p.transplant_lot_id, p.source_type, p.shade_warning, p.created_at, "
                     "sv.name AS variety_name, sv.common_name, "
                     "sv.germination_days_min, sv.germination_days_max, "
-                    "sv.days_to_maturity_min, sv.days_to_maturity_max "
+                    "sv.days_to_maturity_min, sv.days_to_maturity_max, "
+                    "b.label AS bed_label, lp.name AS plot_name "
                     "FROM plantings p "
                     "LEFT JOIN seed_varieties sv ON sv.id = p.variety_id "
+                    "LEFT JOIN beds b ON b.id = p.bed_id "
+                    "LEFT JOIN land_plots lp ON lp.id = b.plot_id "
                     "ORDER BY p.planted_date DESC, p.id DESC"
                 )
             ).mappings().all()
@@ -772,28 +783,34 @@ class FarmDatabaseMixin:
         points,
         transplant_lot_id: int = None,
         soil_temp_f: float = None,
+        shade_warnings=None,
     ):
         """Inserts one plantings row (quantity=1 -- a lattice stamp is one plant) per (x_in, y_in) in points,
         all in one transaction. Decrements transplant_lots.quantity_on_hand by len(points) once when
         transplant_lot_id is given, and regenerates the batch's (variety, planted_date) group's farm_events
         once at the end rather than once per point -- every point shares the same variety_id/planted_date,
         so one regen call covers the whole batch.
+        shade_warnings, when given, is a parallel list of bools (same order/length as points) snapshotting
+        whether that point's shade classification is expected to exceed the variety's sun_needs tolerance
+        before it matures -- None (the default) leaves shade_warning NULL on every inserted row.
         Returns the list of new planting ids.
         """
         planting_ids = []
+        shade_warnings = shade_warnings if shade_warnings is not None else [None] * len(points)
         with self.engine.begin() as db_connection:
-            for x_in, y_in in points:
+            for (x_in, y_in), shade_warning in zip(points, shade_warnings):
                 result = db_connection.execute(
                     text(
                         "INSERT INTO plantings (variety_id, bed_id, planted_date, quantity, x_in, y_in, "
-                        "source_type, transplant_lot_id, soil_temp_f) "
+                        "source_type, transplant_lot_id, soil_temp_f, shade_warning) "
                         "VALUES (:variety_id, :bed_id, :planted_date, 1, :x_in, :y_in, "
-                        ":source_type, :transplant_lot_id, :soil_temp_f)"
+                        ":source_type, :transplant_lot_id, :soil_temp_f, :shade_warning)"
                     ),
                     {
                         "variety_id": variety_id, "bed_id": bed_id, "planted_date": planted_date,
                         "x_in": x_in, "y_in": y_in, "source_type": source_type,
                         "transplant_lot_id": transplant_lot_id, "soil_temp_f": soil_temp_f,
+                        "shade_warning": shade_warning,
                     },
                 )
                 planting_ids.append(result.lastrowid)
@@ -1109,6 +1126,17 @@ class FarmDatabaseMixin:
             db_connection.execute(
                 text("UPDATE beds SET width_ft = :width_ft, length_ft = :length_ft WHERE id = :id"),
                 {"id": bed_id, "width_ft": width_ft, "length_ft": length_ft},
+            )
+
+    def shift_bed_grid_offset(self, bed_id: int, dx_in: float, dy_in: float):
+        "Nudges the bed's fencepost-lattice origin by (dx_in, dy_in), accumulating across calls."
+        with self.engine.begin() as db_connection:
+            db_connection.execute(
+                text(
+                    "UPDATE beds SET grid_offset_x_in = grid_offset_x_in + :dx_in, "
+                    "grid_offset_y_in = grid_offset_y_in + :dy_in WHERE id = :id"
+                ),
+                {"id": bed_id, "dx_in": dx_in, "dy_in": dy_in},
             )
 
     def delete_bed(self, bed_id: int):

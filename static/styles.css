@@ -475,3 +475,43 @@ button.variety-palette-item.armed {
     stroke-width: 0.6;
     stroke-dasharray: 0.5, 0.3;
 }
+
+#grid-offset-controls {
+    display: inline-grid;
+    grid-template-columns: repeat(3, 2rem);
+    grid-template-rows: repeat(3, 2rem);
+    justify-items: center;
+    align-items: center;
+    gap: 0.1rem;
+}
+
+#grid-offset-controls button {
+    margin: 0;
+    padding: 0;
+    width: 2rem;
+    height: 2rem;
+    line-height: 2rem;
+}
+
+#grid-offset-controls button[data-dy-in="-1"] {
+    grid-column: 2;
+    grid-row: 1;
+}
+
+#grid-offset-controls > div {
+    grid-column: 1 / span 3;
+    grid-row: 2;
+    display: flex;
+    justify-content: space-between;
+    width: 100%;
+}
+
+#grid-offset-controls button[data-dy-in="1"] {
+    grid-column: 2;
+    grid-row: 3;
+}
+
+.bed-position {
+    font-size: 0.8rem;
+    opacity: 0.75;
+}

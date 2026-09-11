@@ -493,6 +493,36 @@ def test_add_planting_appears_in_list(client):
     assert "Cherokee Purple" in response.text
 
 
+def test_plantings_page_shows_plot_and_bed_label_for_bed_placed_planting(client):
+    plot_id = _create_plot(client, name="Back Field")
+    bed_id = _create_bed(client, plot_id, label="Bed 2")
+    variety_id = _create_variety(client)
+    client.post("/seed-lots", data={"variety_id": str(variety_id)})
+    _stage_batch(client, bed_id, variety_id, [(0, 0)])
+    response = client.get("/plantings")
+    assert "Back Field / Bed 2" in response.text
+
+
+def test_plantings_page_shows_shade_risk_warning_for_flagged_planting(client):
+    plot_id = _create_plot(client)
+    bed_id = _create_bed(client, plot_id)
+    client.post(f"/beds/{bed_id}/position", data={"x": "0", "y": "0"})
+    client.post(f"/land-plots/{plot_id}/shade-sources", data={"label": "Oak tree"})
+    source_id = db.list_shade_sources_for_plot(plot_id)[0]["id"]
+    client.post(
+        f"/shade-sources/{source_id}/polygons",
+        data={
+            "season": "summer_solstice", "shade_type": "full",
+            "points": json.dumps([[-10, -10], [-10, 10], [10, 10], [10, -10]]),
+        },
+    )
+    variety_id = _create_variety(client, sun_needs="full_sun", days_to_maturity_min="1", days_to_maturity_max="5")
+    client.post("/seed-lots", data={"variety_id": str(variety_id)})
+    _stage_batch(client, bed_id, variety_id, [(0, 0)], planted_date="2026-06-01")
+    response = client.get("/plantings")
+    assert "Shade risk before maturity" in response.text
+
+
 def test_add_planting_rejects_unknown_variety_id(client):
     response = client.post("/plantings", data={"variety_id": "999999", "planted_date": "2026-05-01"})
     assert response.status_code == 422
@@ -1728,3 +1758,67 @@ def test_bed_shade_warnings_true_when_bed_fully_shaded_for_a_full_sun_variety(cl
         },
     )
     assert response.json()["warnings"] == [True]
+
+
+def test_batch_plant_marks_shade_warning_true_when_full_sun_variety_planted_in_full_shade(client):
+    plot_id = _create_plot(client)
+    bed_id = _create_bed(client, plot_id)
+    client.post(f"/beds/{bed_id}/position", data={"x": "0", "y": "0"})
+    client.post(f"/land-plots/{plot_id}/shade-sources", data={"label": "Oak tree"})
+    source_id = db.list_shade_sources_for_plot(plot_id)[0]["id"]
+    client.post(
+        f"/shade-sources/{source_id}/polygons",
+        data={
+            "season": "summer_solstice", "shade_type": "full",
+            "points": json.dumps([[-10, -10], [-10, 10], [10, 10], [10, -10]]),
+        },
+    )
+    variety_id = _create_variety(client, sun_needs="full_sun", days_to_maturity_min="1", days_to_maturity_max="5")
+    client.post("/seed-lots", data={"variety_id": str(variety_id)})
+    _stage_batch(client, bed_id, variety_id, [(0, 0)], planted_date="2026-06-01")
+    planting_id = db.list_plantings_for_bed(bed_id)[0]["id"]
+    assert bool(db.get_planting(planting_id)["shade_warning"]) is True
+
+
+def test_batch_plant_leaves_shade_warning_false_with_no_shade_sources(client):
+    plot_id = _create_plot(client)
+    bed_id = _create_bed(client, plot_id)
+    client.post(f"/beds/{bed_id}/position", data={"x": "0", "y": "0"})
+    variety_id = _create_variety(client, sun_needs="full_sun", days_to_maturity_min="1", days_to_maturity_max="5")
+    client.post("/seed-lots", data={"variety_id": str(variety_id)})
+    _stage_batch(client, bed_id, variety_id, [(0, 0)], planted_date="2026-06-01")
+    planting_id = db.list_plantings_for_bed(bed_id)[0]["id"]
+    assert bool(db.get_planting(planting_id)["shade_warning"]) is False
+
+
+def test_shift_bed_grid_offset_route_returns_new_offset(client):
+    plot_id = _create_plot(client)
+    bed_id = _create_bed(client, plot_id)
+    response = client.post(f"/beds/{bed_id}/grid-offset", data={"dx_in": "1", "dy_in": "0"})
+    assert response.json() == {"grid_offset_x_in": 1, "grid_offset_y_in": 0}
+
+
+def test_shift_bed_grid_offset_route_persists(client):
+    plot_id = _create_plot(client)
+    bed_id = _create_bed(client, plot_id)
+    client.post(f"/beds/{bed_id}/grid-offset", data={"dx_in": "0", "dy_in": "-1"})
+    assert db.get_bed(bed_id)["grid_offset_y_in"] == -1
+
+
+def test_shift_bed_grid_offset_route_returns_404_when_bed_not_found(client):
+    response = client.post("/beds/999999/grid-offset", data={"dx_in": "1", "dy_in": "0"})
+    assert response.status_code == 404
+
+
+def test_shift_bed_grid_offset_route_rejects_dual_axis_delta(client):
+    plot_id = _create_plot(client)
+    bed_id = _create_bed(client, plot_id)
+    response = client.post(f"/beds/{bed_id}/grid-offset", data={"dx_in": "1", "dy_in": "1"})
+    assert response.status_code == 422
+
+
+def test_shift_bed_grid_offset_route_rejects_non_unit_delta(client):
+    plot_id = _create_plot(client)
+    bed_id = _create_bed(client, plot_id)
+    response = client.post(f"/beds/{bed_id}/grid-offset", data={"dx_in": "2", "dy_in": "0"})
+    assert response.status_code == 422
