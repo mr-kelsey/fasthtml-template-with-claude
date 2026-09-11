@@ -457,23 +457,41 @@ def planting_lineage_page(planting_id: int):
     )
 
 
+DEFAULT_SPACING_IN = 12  # fallback lattice spacing for a variety with no spacing_in set -- mirrors bed-detail.js
+
+
+def _dot_radius_in(spacing_in):
+    "A variety's staging circle is drawn at exactly half its spacing -- adjacent same-variety circles just touch."
+    return (spacing_in or DEFAULT_SPACING_IN) / 2
+
+
 def _planting_dot(planting):
     "An already-persisted planting, rendered at its real inch position in the variety's color."
     return Circle(
-        2, cx=planting["x_in"], cy=planting["y_in"], fill=planting["color_hex"] or "#888888",
+        _dot_radius_in(planting["spacing_in"]), cx=planting["x_in"], cy=planting["y_in"],
+        fill=planting["color_hex"] or "#888888",
         cls="planting-dot", data_planting_id=str(planting["id"]), data_variety_id=str(planting["variety_id"]),
         data_common_name=planting["common_name"] or "",
     )
 
 
-DOT_RADIUS_IN = 2  # planting-dot / lattice-point circle radius, in the same inch units as the viewBox
-CANVAS_MARGIN_IN = DOT_RADIUS_IN + 1  # viewBox padding so edge/corner points (x_in or y_in == 0 or the bed's max)
-# aren't clipped by the SVG's own boundary -- their circles would otherwise be cut in half, both visually and
-# for hit-testing (a corner lattice point at (0, length_in) is a real, common click target: bed edges/border
-# rows), since the root <svg> clips content outside its viewBox.
+def _canvas_margin_in(plantings, seed_stock_varieties, transplant_stock_varieties):
+    "viewBox padding so edge/corner points (x_in or y_in == 0 or the bed's max) aren't clipped by the SVG's own "
+    "boundary -- their circles would otherwise be cut in half, both visually and for hit-testing (a corner "
+    "lattice point at (0, length_in) is a real, common click target: bed edges/border rows). Sized to the "
+    "largest circle that could ever be drawn for this bed -- any already-planted variety plus anything "
+    "selectable from either palette -- since the viewBox is fixed at page load but arming a different "
+    "variety client-side isn't."
+    spacings = (
+        [p["spacing_in"] for p in plantings]
+        + [v["spacing_in"] for v in seed_stock_varieties]
+        + [v["spacing_in"] for v in transplant_stock_varieties]
+    )
+    max_radius_in = max([_dot_radius_in(s) for s in spacings], default=_dot_radius_in(None))
+    return max_radius_in + 1
 
 
-def _bed_canvas(bed, plantings):
+def _bed_canvas(bed, plantings, margin_in):
     width_in = bed["width_ft"] * 12
     length_in = bed["length_ft"] * 12
     return Svg(
@@ -489,7 +507,7 @@ def _bed_canvas(bed, plantings):
         G(*[_planting_dot(p) for p in plantings if p["x_in"] is not None], id="planted-layer"),
         G(id="lattice-layer"),
         G(id="staged-layer"),
-        viewBox=f"{-CANVAS_MARGIN_IN} {-CANVAS_MARGIN_IN} {width_in + 2 * CANVAS_MARGIN_IN} {length_in + 2 * CANVAS_MARGIN_IN}",
+        viewBox=f"{-margin_in} {-margin_in} {width_in + 2 * margin_in} {length_in + 2 * margin_in}",
         cls="bed-detail-svg",
         id="bed-detail-svg",
         data_width_in=str(width_in),
@@ -616,7 +634,8 @@ def bed_detail_page(bed_id: int):
     data = _bed_detail_data(
         bed, plantings, seed_stock_varieties, transplant_stock_varieties, transplant_lots_by_variety, companion_rules
     )
-    canvas = _bed_canvas(bed, plantings)
+    margin_in = _canvas_margin_in(plantings, seed_stock_varieties, transplant_stock_varieties)
+    canvas = _bed_canvas(bed, plantings, margin_in)
     palette = fast.Div(
         fast.Fieldset(
             fast.Label(

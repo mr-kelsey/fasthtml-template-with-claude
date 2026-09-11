@@ -280,9 +280,10 @@
         clear_children(staged_layer);
         if (state.armed_variety) {
             var spacing_in = state.armed_variety.spacing_in || DEFAULT_SPACING_IN;
+            var radius_in = spacing_in / 2; // adjacent same-variety circles just touch, never overlap
             lattice_points(spacing_in, data.grid_offset_x_in, data.grid_offset_y_in).forEach(function (point) {
                 var blocked = is_blocked(point, state.armed_variety.id, spacing_in);
-                var circle = make_circle(point.x_in, point.y_in, 2, "lattice-point" + (blocked ? " blocked" : ""));
+                var circle = make_circle(point.x_in, point.y_in, radius_in, "lattice-point" + (blocked ? " blocked" : ""));
                 if (!blocked) {
                     circle.addEventListener("click", function () {
                         toggle_point(point);
@@ -291,7 +292,7 @@
                 lattice_layer.appendChild(circle);
             });
             state.staged_points.forEach(function (point) {
-                var dot = make_circle(point.x_in, point.y_in, 2, "planting-dot staged", state.armed_variety.color_hex);
+                var dot = make_circle(point.x_in, point.y_in, radius_in, "planting-dot staged", state.armed_variety.color_hex);
                 dot.setAttribute("data-common-name", state.armed_variety.common_name);
                 // The staged dot sits on top of (and, once staged, always outranks -- see is_blocked)
                 // its own lattice point, so unstaging has to be wired here rather than on the lattice
