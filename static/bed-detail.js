@@ -43,6 +43,16 @@
         staged_points: [], // [{x_in, y_in}]
     };
 
+    // "variety_id|planted_date|x_in,y_in" -> bool. render_lattice() rebuilds every lattice/staged circle from
+    // scratch on every staging click, so without this a warning already known from a prior fetch would flash
+    // away and only reappear once the new fetch (re-issued on every render) round-trips -- most noticeable on
+    // a slow connection, where it can read as the warning having vanished for good rather than just refreshing.
+    var shade_warning_cache = {};
+
+    function shade_cache_key(variety_id, planted_date, x_in, y_in) {
+        return variety_id + "|" + planted_date + "|" + x_in + "," + y_in;
+    }
+
     function post(path, body) {
         return fetch(path, {
             method: "POST",
@@ -259,9 +269,11 @@
         if (!state.armed_variety || !batch_planted_date_input || !batch_planted_date_input.value) return;
         var collected = collect_shade_check_points();
         if (!collected.points.length) return;
+        var variety_id = state.armed_variety.id;
+        var planted_date = batch_planted_date_input.value;
         post("/beds/" + data.bed_id + "/shade-warnings", {
-            variety_id: String(state.armed_variety.id),
-            planted_date: batch_planted_date_input.value,
+            variety_id: String(variety_id),
+            planted_date: planted_date,
             points: JSON.stringify(collected.points),
         })
             .then(function (response) {
@@ -272,6 +284,10 @@
                 collected.els.forEach(function (el, i) {
                     el.classList.toggle("shade-warning", !!result.warnings[i]);
                 });
+                collected.points.forEach(function (point, i) {
+                    shade_warning_cache[shade_cache_key(variety_id, planted_date, point.x_in, point.y_in)] =
+                        !!result.warnings[i];
+                });
             });
     }
 
@@ -281,9 +297,14 @@
         if (state.armed_variety) {
             var spacing_in = state.armed_variety.spacing_in || DEFAULT_SPACING_IN;
             var radius_in = spacing_in / 2; // adjacent same-variety circles just touch, never overlap
+            var planted_date = batch_planted_date_input ? batch_planted_date_input.value : "";
+            var cached_warning = function (point) {
+                return !!shade_warning_cache[shade_cache_key(state.armed_variety.id, planted_date, point.x_in, point.y_in)];
+            };
             lattice_points(spacing_in, data.grid_offset_x_in, data.grid_offset_y_in).forEach(function (point) {
                 var blocked = is_blocked(point, state.armed_variety.id, spacing_in);
                 var circle = make_circle(point.x_in, point.y_in, radius_in, "lattice-point" + (blocked ? " blocked" : ""));
+                if (cached_warning(point)) circle.classList.add("shade-warning");
                 if (!blocked) {
                     circle.addEventListener("click", function () {
                         toggle_point(point);
@@ -293,6 +314,7 @@
             });
             state.staged_points.forEach(function (point) {
                 var dot = make_circle(point.x_in, point.y_in, radius_in, "planting-dot staged", state.armed_variety.color_hex);
+                if (cached_warning(point)) dot.classList.add("shade-warning");
                 dot.setAttribute("data-common-name", state.armed_variety.common_name);
                 // The staged dot sits on top of (and, once staged, always outranks -- see is_blocked)
                 // its own lattice point, so unstaging has to be wired here rather than on the lattice

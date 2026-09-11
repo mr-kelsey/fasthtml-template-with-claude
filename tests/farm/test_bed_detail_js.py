@@ -1,4 +1,5 @@
 import json
+import time
 
 import db
 
@@ -366,3 +367,38 @@ def test_clicking_zoom_reset_clears_the_explicit_pixel_size(page, live_server_ur
 
     style_width = page.locator("#bed-detail-svg").evaluate("el => el.style.width")
     assert style_width == ""
+
+
+def test_shade_warning_on_other_points_survives_staging_a_point(page, live_server_url):
+    """Regression: render_lattice() rebuilds every lattice/staged circle from scratch on each staging click, so
+    a shade-warning class known from a prior fetch would flash away and only reappear once a fresh fetch
+    (re-issued on every render) round-trips -- on a slow connection this reads as the warning vanishing for
+    good rather than just refreshing. A client-side warning cache should reapply it immediately instead.
+    Delaying the route lets this assert the tint is back before that fetch could possibly have resolved."""
+    plot_id, bed_id = _make_bed_with_plot(width_ft=2, length_ft=2)  # 24in x 24in
+    db.add_seed_variety(
+        "Lettuce", "Buttercrunch", "Asteraceae", spacing_in=8, sun_needs="full_sun",
+        days_to_maturity_min=1, days_to_maturity_max=5, color_hex="#00ff00",
+    )
+    variety_id = db.list_seed_varieties()[0]["id"]
+    _add_seed_lot(variety_id)
+    db.add_shade_source(plot_id, "Oak tree")
+    source_id = db.list_shade_sources_for_plot(plot_id)[0]["id"]
+    db.save_shade_polygon(source_id, "summer_solstice", "full", _FULL_COVERAGE_SQUARE)
+
+    page.goto(f"{live_server_url}/beds/{bed_id}")
+    with page.expect_response(lambda r: "/shade-warnings" in r.url):
+        _arm_seed_variety(page, variety_id)
+
+    warned = page.locator('#lattice-layer circle[cx="0"][cy="0"]')
+    assert "shade-warning" in warned.get_attribute("class")
+
+    def _delay_then_continue(route):
+        time.sleep(0.3)
+        route.continue_()
+
+    page.route("**/shade-warnings", _delay_then_continue)
+    page.locator('#lattice-layer circle[cx="8"][cy="0"]').click()
+
+    still_warned = page.locator('#lattice-layer circle[cx="0"][cy="0"]')
+    assert "shade-warning" in still_warned.get_attribute("class")
