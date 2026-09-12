@@ -333,11 +333,11 @@ def test_add_planting_persists_variety_and_date():
     assert (planting["variety_name"], planting["planted_date"]) == ("Cherokee Purple", "2026-05-01")
 
 
-def test_add_planting_defaults_bed_id_and_location_to_none():
+def test_add_planting_defaults_bed_id_to_none():
     variety_id = _add_variety()
     db.add_planting(variety_id, "2026-05-01")
     planting = db.list_plantings()[0]
-    assert (planting["bed_id"], planting["location"]) == (None, None)
+    assert planting["bed_id"] is None
 
 
 def test_add_planting_persists_seed_lot_id():
@@ -419,9 +419,9 @@ def test_list_plantings_includes_bed_label_and_plot_name_when_bed_set():
     assert (planting["plot_name"], planting["bed_label"]) == ("Back Field", "Bed 2")
 
 
-def test_list_plantings_bed_label_and_plot_name_are_none_for_free_text_location():
+def test_list_plantings_bed_label_and_plot_name_are_none_when_unplaced():
     variety_id = _add_variety()
-    db.add_planting(variety_id, "2026-05-01", location="North corner")
+    db.add_planting(variety_id, "2026-05-01")
     planting = db.list_plantings()[0]
     assert (planting["plot_name"], planting["bed_label"]) == (None, None)
 
@@ -900,12 +900,12 @@ def test_same_variety_and_date_plantings_in_different_beds_merge_into_one_event(
     assert len(db.list_farm_events_in_range(*ALL_TIME)) == 1
 
 
-def test_same_variety_and_date_bed_and_location_plantings_merge_into_one_event():
-    "Grouping is bed-placed or not -- a free-text location planting merges with a bed planting sharing the key."
+def test_same_variety_and_date_bed_and_unplaced_plantings_merge_into_one_event():
+    "Grouping is bed-placed or not -- an unplaced planting merges with a bed planting sharing the key."
     variety_id = _add_variety(days_to_maturity_min=60, days_to_maturity_max=70)
     bed_id = _add_bed()
     db.add_planting(variety_id, "2026-05-01", bed_id=bed_id, x_in=0, y_in=0)
-    db.add_planting(variety_id, "2026-05-01", location="Back row")
+    db.add_planting(variety_id, "2026-05-01")
     assert len(db.list_farm_events_in_range(*ALL_TIME)) == 1
 
 

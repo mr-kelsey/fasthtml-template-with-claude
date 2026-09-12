@@ -28,7 +28,6 @@ SCHEMA_STATEMENTS = [
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         variety_id INTEGER NOT NULL,
         bed_id INTEGER,
-        location TEXT,
         planted_date TEXT NOT NULL,
         quantity INTEGER,
         quantity_germinated INTEGER,
@@ -199,7 +198,7 @@ _SEED_VARIETY_COLUMNS = (
 )
 
 _PLANTING_COLUMNS = (
-    "id, variety_id, bed_id, location, planted_date, quantity, quantity_germinated, quantity_culled, notes, "
+    "id, variety_id, bed_id, planted_date, quantity, quantity_germinated, quantity_culled, notes, "
     "x_in, y_in, seed_lot_id, transplant_lot_id, source_type, soil_temp_f, shade_warning, created_at"
 )
 
@@ -239,10 +238,10 @@ _FARM_EVENT_COLUMNS = (
 )
 
 _PLANTING_OPTIONAL_FIELDS = (
-    "bed_id", "location", "quantity", "quantity_germinated", "quantity_culled", "notes",
+    "bed_id", "quantity", "quantity_germinated", "quantity_culled", "notes",
     "x_in", "y_in", "seed_lot_id", "transplant_lot_id", "source_type", "soil_temp_f",
 )
-_PLANTING_TEXT_FIELDS = ("location", "notes")
+_PLANTING_TEXT_FIELDS = ("notes",)
 _PLANTING_FIELD_DEFAULTS = {"source_type": "seed"}
 
 _GARDEN_PRODUCT_OPTIONAL_FIELDS = ("product_type", "npk_n", "npk_p", "npk_k", "benefit_notes", "application_frequency_days")
@@ -596,11 +595,11 @@ class FarmDatabaseMixin:
     def list_plantings(self):
         """Joined with seed_varieties so callers get the variety's common name and maturity data for expected-window
         math, and with beds/land_plots so callers get the plot/bed a bed-placed planting actually lives in
-        (bed_label/plot_name are None for a planting with no bed_id, e.g. one recorded against free-text location)."""
+        (bed_label/plot_name are None for a planting with no bed_id, e.g. one not placed on any bed)."""
         with self.engine.connect() as db_connection:
             return db_connection.execute(
                 text(
-                    "SELECT p.id, p.variety_id, p.bed_id, p.location, p.planted_date, p.quantity, "
+                    "SELECT p.id, p.variety_id, p.bed_id, p.planted_date, p.quantity, "
                     "p.quantity_germinated, p.notes, p.x_in, p.y_in, p.seed_lot_id, "
                     "p.transplant_lot_id, p.source_type, p.shade_warning, p.created_at, "
                     "sv.name AS variety_name, sv.common_name, "
@@ -620,7 +619,7 @@ class FarmDatabaseMixin:
         with self.engine.connect() as db_connection:
             return db_connection.execute(
                 text(
-                    "SELECT p.id, p.variety_id, p.bed_id, p.location, p.planted_date, p.quantity, "
+                    "SELECT p.id, p.variety_id, p.bed_id, p.planted_date, p.quantity, "
                     "p.quantity_germinated, p.notes, p.x_in, p.y_in, p.seed_lot_id, "
                     "p.transplant_lot_id, p.source_type, p.soil_temp_f, p.created_at, "
                     "sv.name AS variety_name, sv.common_name, sv.color_hex, sv.spacing_in, "
@@ -652,10 +651,10 @@ class FarmDatabaseMixin:
         with self.engine.begin() as db_connection:
             result = db_connection.execute(
                 text(
-                    "INSERT INTO plantings (variety_id, bed_id, location, planted_date, quantity, "
+                    "INSERT INTO plantings (variety_id, bed_id, planted_date, quantity, "
                     "quantity_germinated, quantity_culled, notes, x_in, y_in, seed_lot_id, transplant_lot_id, "
                     "source_type, soil_temp_f) "
-                    "VALUES (:variety_id, :bed_id, :location, :planted_date, :quantity, "
+                    "VALUES (:variety_id, :bed_id, :planted_date, :quantity, "
                     ":quantity_germinated, :quantity_culled, :notes, :x_in, :y_in, :seed_lot_id, "
                     ":transplant_lot_id, :source_type, :soil_temp_f)"
                 ),
@@ -673,7 +672,6 @@ class FarmDatabaseMixin:
         source_type: str,
         points,
         transplant_lot_id: int = None,
-        soil_temp_f: float = None,
         shade_warnings=None,
         quantity_per_point: int = 1,
     ):
@@ -686,6 +684,8 @@ class FarmDatabaseMixin:
         shade_warnings, when given, is a parallel list of bools (same order/length as points) snapshotting
         whether that point's shade classification is expected to exceed the variety's sun_needs tolerance
         before it matures -- None (the default) leaves shade_warning NULL on every inserted row.
+        soil_temp_f isn't settable here -- it can only be measured by physically planting, which hasn't
+        happened yet at batch-staging time -- see update_planting for recording it after the fact.
         Returns the list of new planting ids.
         """
         planting_ids = []
@@ -695,14 +695,14 @@ class FarmDatabaseMixin:
                 result = db_connection.execute(
                     text(
                         "INSERT INTO plantings (variety_id, bed_id, planted_date, quantity, x_in, y_in, "
-                        "source_type, transplant_lot_id, soil_temp_f, shade_warning) "
+                        "source_type, transplant_lot_id, shade_warning) "
                         "VALUES (:variety_id, :bed_id, :planted_date, :quantity, :x_in, :y_in, "
-                        ":source_type, :transplant_lot_id, :soil_temp_f, :shade_warning)"
+                        ":source_type, :transplant_lot_id, :shade_warning)"
                     ),
                     {
                         "variety_id": variety_id, "bed_id": bed_id, "planted_date": planted_date,
                         "quantity": quantity_per_point, "x_in": x_in, "y_in": y_in, "source_type": source_type,
-                        "transplant_lot_id": transplant_lot_id, "soil_temp_f": soil_temp_f,
+                        "transplant_lot_id": transplant_lot_id,
                         "shade_warning": shade_warning,
                     },
                 )
@@ -755,7 +755,7 @@ class FarmDatabaseMixin:
             db_connection.execute(
                 text(
                     "UPDATE plantings SET variety_id = :variety_id, planted_date = :planted_date, "
-                    "bed_id = :bed_id, location = :location, quantity = :quantity, "
+                    "bed_id = :bed_id, quantity = :quantity, "
                     "quantity_germinated = :quantity_germinated, quantity_culled = :quantity_culled, notes = :notes, "
                     "x_in = :x_in, y_in = :y_in, seed_lot_id = :seed_lot_id, "
                     "transplant_lot_id = :transplant_lot_id, source_type = :source_type, "

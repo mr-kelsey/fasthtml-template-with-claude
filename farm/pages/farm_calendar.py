@@ -192,7 +192,7 @@ def _optional_value(row, field):
 
 
 def _germination_record_row(planting, event_id, year, month):
-    label = f"#{planting['id']}" + (f" — {planting['location']}" if planting["location"] else "")
+    label = f"#{planting['id']}"
     sown = planting["quantity"] if planting["quantity"] is not None else "?"
     return fast.Li(
         f"{label} (sown: {sown})",

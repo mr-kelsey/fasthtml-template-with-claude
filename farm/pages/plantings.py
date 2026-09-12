@@ -47,15 +47,19 @@ def _format_window(window):
     return start.isoformat() if start == end else f"{start.isoformat()} to {end.isoformat()}"
 
 
+def _position_label(planting):
+    return f"{planting['plot_name']}/{planting['bed_label']} ({planting['x_in']:g}in, {planting['y_in']:g}in)"
+
+
 def _overlap_warnings(plantings):
-    "Plantings sharing a non-blank location whose expected harvest windows intersect warn each other."
+    "Plantings sharing a bed and exact in-bed position whose expected harvest windows intersect warn each other."
     warnings = {}
-    by_location = {}
+    by_position = {}
     for planting in plantings:
-        location = (planting["location"] or "").strip()
-        if location:
-            by_location.setdefault(location, []).append(planting)
-    for location, group in by_location.items():
+        if planting["bed_id"] is not None and planting["x_in"] is not None and planting["y_in"] is not None:
+            key = (planting["bed_id"], planting["x_in"], planting["y_in"])
+            by_position.setdefault(key, []).append(planting)
+    for group in by_position.values():
         for i, first in enumerate(group):
             first_window = compute_window(first["planted_date"], first["days_to_maturity_min"], first["days_to_maturity_max"])
             if first_window is None:
@@ -68,10 +72,10 @@ def _overlap_warnings(plantings):
                     continue
                 if max(first_window[0], second_window[0]) <= min(first_window[1], second_window[1]):
                     warnings.setdefault(first["id"], []).append(
-                        f"Overlaps with {second['variety_name']} (planted {second['planted_date']}) at {location}"
+                        f"Overlaps with {second['variety_name']} (planted {second['planted_date']}) at {_position_label(second)}"
                     )
                     warnings.setdefault(second["id"], []).append(
-                        f"Overlaps with {first['variety_name']} (planted {first['planted_date']}) at {location}"
+                        f"Overlaps with {first['variety_name']} (planted {first['planted_date']}) at {_position_label(first)}"
                     )
     return warnings
 
@@ -94,11 +98,6 @@ def _planting_form(action, submit_label, varieties, planting=None):
         fast.Input(
             name="planted_date", type="date", value=planting["planted_date"] if planting else "", required=True
         ),
-        fast.Input(
-            name="location",
-            placeholder="Location (optional, e.g. Bed 3 row 2)",
-            value=(planting["location"] or "") if planting else "",
-        ),
         fast.Input(name="quantity", type="number", placeholder="Quantity", value=_optional_value(planting, "quantity")),
         fast.Input(
             name="quantity_germinated",
@@ -112,6 +111,13 @@ def _planting_form(action, submit_label, varieties, planting=None):
             placeholder="Quantity culled",
             value=_optional_value(planting, "quantity_culled"),
         ),
+        fast.Input(
+            name="soil_temp_f",
+            type="number",
+            step="0.1",
+            placeholder="Soil temp (F, optional)",
+            value=_optional_value(planting, "soil_temp_f"),
+        ),
         fast.Textarea(
             planting["notes"] or "" if planting else "", name="notes", placeholder="Notes (optional)"
         ),
@@ -122,7 +128,7 @@ def _planting_form(action, submit_label, varieties, planting=None):
 
 
 def _bed_location_cell(planting):
-    "Plot/bed/in-bed position for a bed-placed planting -- blank for one recorded against free-text location only."
+    "Plot/bed/in-bed position for a bed-placed planting -- blank for one never placed on any bed."
     if planting["bed_id"] is None:
         return ""
     label = f"{planting['plot_name']} / {planting['bed_label']}"
@@ -141,7 +147,6 @@ def _planting_row(planting, warnings):
         fast.Td(planting["variety_name"] or ""),
         fast.Td(planting["common_name"] or ""),
         fast.Td(planting["planted_date"]),
-        fast.Td(planting["location"] or ""),
         fast.Td(_bed_location_cell(planting)),
         fast.Td(planting["quantity"] if planting["quantity"] is not None else ""),
         fast.Td(planting["quantity_germinated"] if planting["quantity_germinated"] is not None else ""),
@@ -165,7 +170,7 @@ def list_plantings_page():
     plantings = db.list_plantings()
     warnings = _overlap_warnings(plantings)
     headers = [
-        "Variety", "Common Name", "Planted", "Location", "Bed", "Qty", "Germinated",
+        "Variety", "Common Name", "Planted", "Bed", "Qty", "Germinated",
         "Germination window", "Harvest window", "Warnings", "",
     ]
     rows = (
@@ -202,8 +207,8 @@ def _validate_variety_id(variety_id: str):
     return parsed_variety_id
 
 
-def _validate_planting_fields(variety_id, planted_date, quantity, quantity_germinated, quantity_culled):
-    "Returns (variety_id, planted_date, quantity, quantity_germinated, quantity_culled) or an error fast.Response."
+def _validate_planting_fields(variety_id, planted_date, quantity, quantity_germinated, quantity_culled, soil_temp_f):
+    "Returns (variety_id, planted_date, quantity, quantity_germinated, quantity_culled, soil_temp_f) or an error fast.Response."
     validated_variety_id = _validate_variety_id(variety_id)
     if isinstance(validated_variety_id, fast.Response):
         return validated_variety_id
@@ -221,30 +226,33 @@ def _validate_planting_fields(variety_id, planted_date, quantity, quantity_germi
         return fast.Response("Quantity culled must be a number.", status_code=422)
     if quantity_culled is not None and (quantity_germinated is None or quantity_culled > quantity_germinated):
         return fast.Response("Quantity culled cannot exceed quantity germinated.", status_code=422)
-    return validated_variety_id, planted_date, quantity, quantity_germinated, quantity_culled
+    ok, soil_temp_f = parse_optional_float(soil_temp_f)
+    if not ok:
+        return fast.Response("Soil temp must be a number.", status_code=422)
+    return validated_variety_id, planted_date, quantity, quantity_germinated, quantity_culled, soil_temp_f
 
 
 @router("/plantings", methods=["post"])
 def add_planting_route(
     variety_id: str,
     planted_date: str,
-    location: str = "",
     quantity: str = "",
     quantity_germinated: str = "",
     quantity_culled: str = "",
+    soil_temp_f: str = "",
     notes: str = "",
 ):
-    validated = _validate_planting_fields(variety_id, planted_date, quantity, quantity_germinated, quantity_culled)
+    validated = _validate_planting_fields(variety_id, planted_date, quantity, quantity_germinated, quantity_culled, soil_temp_f)
     if isinstance(validated, fast.Response):
         return validated
-    variety_id, planted_date, quantity, quantity_germinated, quantity_culled = validated
+    variety_id, planted_date, quantity, quantity_germinated, quantity_culled, soil_temp_f = validated
     db.add_planting(
         variety_id,
         planted_date,
-        location=location.strip() or None,
         quantity=quantity,
         quantity_germinated=quantity_germinated,
         quantity_culled=quantity_culled,
+        soil_temp_f=soil_temp_f,
         notes=notes.strip() or None,
     )
     return fast.Redirect("/plantings")
@@ -310,25 +318,24 @@ def update_planting_route(
     planting_id: int,
     variety_id: str,
     planted_date: str,
-    location: str = "",
     quantity: str = "",
     quantity_germinated: str = "",
     quantity_culled: str = "",
+    soil_temp_f: str = "",
     notes: str = "",
 ):
     existing = db.get_planting(planting_id)
     if existing is None:
         return fast.Response("Planting not found.", status_code=404)
-    validated = _validate_planting_fields(variety_id, planted_date, quantity, quantity_germinated, quantity_culled)
+    validated = _validate_planting_fields(variety_id, planted_date, quantity, quantity_germinated, quantity_culled, soil_temp_f)
     if isinstance(validated, fast.Response):
         return validated
-    variety_id, planted_date, quantity, quantity_germinated, quantity_culled = validated
+    variety_id, planted_date, quantity, quantity_germinated, quantity_culled, soil_temp_f = validated
     db.update_planting(
         planting_id,
         variety_id,
         planted_date,
         bed_id=existing["bed_id"],
-        location=location.strip() or None,
         quantity=quantity,
         quantity_germinated=quantity_germinated,
         quantity_culled=quantity_culled,
@@ -338,7 +345,7 @@ def update_planting_route(
         seed_lot_id=existing["seed_lot_id"],
         transplant_lot_id=existing["transplant_lot_id"],
         source_type=existing["source_type"],
-        soil_temp_f=existing["soil_temp_f"],
+        soil_temp_f=soil_temp_f,
     )
     return fast.Redirect("/plantings")
 
@@ -585,7 +592,6 @@ def _batch_plant_form(bed_id):
         fast.Input(type="hidden", name="source_type", id="batch-source-type"),
         fast.Input(type="hidden", name="points", id="batch-points"),
         fast.Div(id="batch-staged-count"),
-        fast.Input(name="soil_temp_f", type="number", step="0.1", placeholder="Soil temp (F, optional)"),
         fast.Label(
             "Seeds per location:",
             fast.Input(type="number", min="1", name="quantity_per_point", id="batch-quantity-per-point"),
@@ -739,7 +745,6 @@ def batch_plant_route(
     source_type: str,
     planted_date: str,
     points: str,
-    soil_temp_f: str = "",
     transplant_lot_id: str = "",
     quantity_per_point: str = "1",
 ):
@@ -761,9 +766,6 @@ def batch_plant_route(
     parsed_points, error = _validate_points(points, width_in, length_in)
     if error:
         return fast.Response(error, status_code=422)
-    ok, soil_temp_f_value = parse_optional_float(soil_temp_f)
-    if not ok:
-        return fast.Response("Soil temp must be a number.", status_code=422)
     validated_transplant_lot_id = None
     quantity_per_point_value = 1
     if source_type == "seed":
@@ -788,7 +790,7 @@ def batch_plant_route(
     shade_warnings = _shade_warnings_for_points(bed, variety, planted_date, parsed_points)
     db.batch_add_plantings(
         variety_id, planted_date, bed_id, source_type, parsed_points,
-        transplant_lot_id=validated_transplant_lot_id, soil_temp_f=soil_temp_f_value,
+        transplant_lot_id=validated_transplant_lot_id,
         shade_warnings=shade_warnings, quantity_per_point=quantity_per_point_value,
     )
     return fast.Redirect(f"/beds/{bed_id}")

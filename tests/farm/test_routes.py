@@ -583,6 +583,26 @@ def test_add_planting_rejects_non_numeric_quantity(client):
     assert response.status_code == 422
 
 
+def test_add_planting_persists_soil_temp_f(client):
+    variety_id = _create_variety(client)
+    client.post(
+        "/plantings", data={"variety_id": str(variety_id), "planted_date": "2026-05-01", "soil_temp_f": "65.5"}
+    )
+    planting_id = db.list_plantings()[0]["id"]
+    assert db.get_planting(planting_id)["soil_temp_f"] == 65.5
+
+
+def test_edit_planting_updates_soil_temp_f(client):
+    variety_id = _create_variety(client)
+    client.post("/plantings", data={"variety_id": str(variety_id), "planted_date": "2026-05-01"})
+    planting_id = db.list_plantings()[0]["id"]
+    client.post(
+        f"/plantings/{planting_id}/edit",
+        data={"variety_id": str(variety_id), "planted_date": "2026-05-01", "soil_temp_f": "70"},
+    )
+    assert db.get_planting(planting_id)["soil_temp_f"] == 70.0
+
+
 def test_edit_planting_updates_quantity(client):
     variety_id = _create_variety(client)
     client.post("/plantings", data={"variety_id": str(variety_id), "planted_date": "2026-05-01", "quantity": "10"})
@@ -688,30 +708,33 @@ def test_harvest_delete_route_removes_row(client):
     assert db.list_harvests_for_planting(planting_id) == []
 
 
-def test_overlapping_plantings_at_same_location_show_warning(client):
+def test_overlapping_plantings_at_the_same_bed_position_show_warning(client):
+    plot_id = _create_plot(client)
+    bed_id = _create_bed(client, plot_id)
     variety_id = _create_variety(client, days_to_maturity_min="60", days_to_maturity_max="70")
-    client.post(
-        "/plantings",
-        data={"variety_id": str(variety_id), "planted_date": "2026-05-01", "location": "Bed 3 row 2"},
-    )
-    client.post(
-        "/plantings",
-        data={"variety_id": str(variety_id), "planted_date": "2026-05-05", "location": "Bed 3 row 2"},
-    )
+    db.add_planting(variety_id, "2026-05-01", bed_id=bed_id, x_in=0, y_in=0)
+    db.add_planting(variety_id, "2026-05-05", bed_id=bed_id, x_in=0, y_in=0)
     response = client.get("/plantings")
     assert "Overlaps with" in response.text
 
 
-def test_non_overlapping_plantings_at_same_location_show_no_warning(client):
+def test_non_overlapping_plantings_at_the_same_bed_position_show_no_warning(client):
+    plot_id = _create_plot(client)
+    bed_id = _create_bed(client, plot_id)
     variety_id = _create_variety(client, days_to_maturity_min="60", days_to_maturity_max="70")
-    client.post(
-        "/plantings",
-        data={"variety_id": str(variety_id), "planted_date": "2026-05-01", "location": "Bed 3 row 2"},
-    )
-    client.post(
-        "/plantings",
-        data={"variety_id": str(variety_id), "planted_date": "2026-09-01", "location": "Bed 3 row 2"},
-    )
+    db.add_planting(variety_id, "2026-05-01", bed_id=bed_id, x_in=0, y_in=0)
+    db.add_planting(variety_id, "2026-09-01", bed_id=bed_id, x_in=0, y_in=0)
+    response = client.get("/plantings")
+    assert "Overlaps with" not in response.text
+
+
+def test_plantings_at_different_positions_in_the_same_bed_show_no_warning(client):
+    "Sharing a bed alone isn't a conflict -- a bed has room for many plants at different positions."
+    plot_id = _create_plot(client)
+    bed_id = _create_bed(client, plot_id)
+    variety_id = _create_variety(client, days_to_maturity_min="60", days_to_maturity_max="70")
+    db.add_planting(variety_id, "2026-05-01", bed_id=bed_id, x_in=0, y_in=0)
+    db.add_planting(variety_id, "2026-05-05", bed_id=bed_id, x_in=12, y_in=0)
     response = client.get("/plantings")
     assert "Overlaps with" not in response.text
 
@@ -1605,11 +1628,11 @@ def test_record_route_404s_for_custom_event_type(client):
 
 def test_record_germination_page_lists_every_planting_in_group(client):
     variety_id = _create_variety(client, germination_days_min="5", germination_days_max="10")
-    client.post("/plantings", data={"variety_id": str(variety_id), "planted_date": "2026-05-01", "location": "Row A"})
-    client.post("/plantings", data={"variety_id": str(variety_id), "planted_date": "2026-05-01", "location": "Row B"})
+    client.post("/plantings", data={"variety_id": str(variety_id), "planted_date": "2026-05-01", "quantity": "3"})
+    client.post("/plantings", data={"variety_id": str(variety_id), "planted_date": "2026-05-01", "quantity": "7"})
     event = db.list_farm_events_in_range("2000-01-01", "2100-01-01")[0]
     response = client.get(f"/farm-calendar/{event['id']}/record")
-    assert "Row A" in response.text and "Row B" in response.text
+    assert "(sown: 3)" in response.text and "(sown: 7)" in response.text
 
 
 def test_post_record_germination_updates_target_planting_quantity(client):
