@@ -13,13 +13,14 @@ RECORDABLE_EVENT_TYPES = ("germination-check", "harvest")
 router = fast.APIRouter()
 
 EVENT_TYPE_COLORS = {
+    "plant": "#2196f3",
     "germination-check": "#4caf50",
     "harvest": "#ff9800",
     "product-reminder": "#00897b",
     "custom": "#999999",
 }
 
-EVENT_TYPE_OPTIONS = ["custom", "germination-check", "harvest"]
+EVENT_TYPE_OPTIONS = ["custom", "plant", "germination-check", "harvest"]
 
 
 def _farm_calendar_url(year, month, base="/farm-calendar"):

@@ -1824,6 +1824,47 @@ def test_bed_shade_grid_defaults_to_full_sun_with_no_shade_sources(client):
     assert all(cell == "full_sun" for row in body["cells"] for cell in row)
 
 
+def test_plantings_as_of_404s_for_an_unknown_bed(client):
+    response = client.get("/beds/999999/plantings-as-of")
+    assert response.status_code == 404
+
+
+def test_plantings_as_of_hides_a_planting_planted_after_the_queried_date(client):
+    plot_id = _create_plot(client)
+    bed_id = _create_bed(client, plot_id)
+    variety_id = _create_variety(client)
+    db.add_planting(variety_id, "2026-12-01", bed_id=bed_id, x_in=0, y_in=0)
+    body = client.get(f"/beds/{bed_id}/plantings-as-of?on_date=2026-06-01").json()
+    assert body == []
+
+
+def test_plantings_as_of_hides_a_planting_past_its_harvest_window(client):
+    plot_id = _create_plot(client)
+    bed_id = _create_bed(client, plot_id)
+    variety_id = _create_variety(client, days_to_maturity_min="10", days_to_maturity_max="20")
+    db.add_planting(variety_id, "2026-01-01", bed_id=bed_id, x_in=0, y_in=0)
+    body = client.get(f"/beds/{bed_id}/plantings-as-of?on_date=2026-06-01").json()
+    assert body == []
+
+
+def test_plantings_as_of_shows_a_planting_within_its_harvest_window(client):
+    plot_id = _create_plot(client)
+    bed_id = _create_bed(client, plot_id)
+    variety_id = _create_variety(client, days_to_maturity_min="10", days_to_maturity_max="20")
+    db.add_planting(variety_id, "2026-06-01", bed_id=bed_id, x_in=0, y_in=0)
+    body = client.get(f"/beds/{bed_id}/plantings-as-of?on_date=2026-06-05").json()
+    assert len(body) == 1
+
+
+def test_plantings_as_of_shows_a_planting_with_no_maturity_data_regardless_of_date(client):
+    plot_id = _create_plot(client)
+    bed_id = _create_bed(client, plot_id)
+    variety_id = _create_variety(client)
+    db.add_planting(variety_id, "2026-01-01", bed_id=bed_id, x_in=0, y_in=0)
+    body = client.get(f"/beds/{bed_id}/plantings-as-of?on_date=2026-12-31").json()
+    assert len(body) == 1
+
+
 def test_bed_shade_warnings_returns_404_when_bed_not_found(client):
     variety_id = _create_variety(client)
     response = client.post(

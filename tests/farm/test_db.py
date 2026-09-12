@@ -774,6 +774,41 @@ def test_seed_planting_still_generates_germination_check_event():
     assert [e["event_type"] for e in db.list_farm_events_in_range(*ALL_TIME)] == ["germination-check"]
 
 
+def _future_date(days=30):
+    return (date.today() + timedelta(days=days)).isoformat()
+
+
+def test_adding_a_future_dated_planting_creates_a_plant_reminder_event():
+    variety_id = _add_variety(days_to_maturity_min=60, days_to_maturity_max=70)
+    db.add_planting(variety_id, _future_date())
+    events = db.list_farm_events_in_range(*ALL_TIME)
+    assert "plant" in [e["event_type"] for e in events]
+
+
+def test_generated_plant_event_spans_exactly_the_planted_date():
+    variety_id = _add_variety(days_to_maturity_min=60, days_to_maturity_max=70)
+    planted_date = _future_date()
+    db.add_planting(variety_id, planted_date)
+    events = db.list_farm_events_in_range(*ALL_TIME)
+    plant_event = next(e for e in events if e["event_type"] == "plant")
+    assert (plant_event["start_date"], plant_event["end_date"]) == (planted_date, planted_date)
+
+
+def test_adding_a_planting_dated_today_creates_no_plant_reminder_event():
+    variety_id = _add_variety(days_to_maturity_min=60, days_to_maturity_max=70)
+    db.add_planting(variety_id, date.today().isoformat())
+    events = db.list_farm_events_in_range(*ALL_TIME)
+    assert "plant" not in [e["event_type"] for e in events]
+
+
+def test_editing_a_future_planting_back_to_today_removes_its_plant_reminder_event():
+    variety_id = _add_variety(days_to_maturity_min=60, days_to_maturity_max=70)
+    planting_id = db.add_planting(variety_id, _future_date())
+    db.update_planting(planting_id, variety_id, date.today().isoformat())
+    events = db.list_farm_events_in_range(*ALL_TIME)
+    assert "plant" not in [e["event_type"] for e in events]
+
+
 def test_update_planting_regenerates_events_instead_of_duplicating():
     variety_id = _add_variety(days_to_maturity_min=60, days_to_maturity_max=70)
     planting_id = db.add_planting(variety_id, "2026-05-01")

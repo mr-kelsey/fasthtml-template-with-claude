@@ -15,7 +15,7 @@
     var lattice_layer = document.getElementById("lattice-layer");
     var staged_layer = document.getElementById("staged-layer");
     var shade_layer = document.getElementById("shade-layer");
-    var shade_date_input = document.getElementById("shade-date");
+    var garden_date_input = document.getElementById("garden-date");
     var palette_seed = document.getElementById("palette-seed");
     var palette_transplant = document.getElementById("palette-transplant");
     var mode_seed_radio = document.getElementById("mode-seed");
@@ -24,7 +24,6 @@
     var batch_variety_id_input = document.getElementById("batch-variety-id");
     var batch_source_type_input = document.getElementById("batch-source-type");
     var batch_points_input = document.getElementById("batch-points");
-    var batch_planted_date_input = document.getElementById("batch-planted-date");
     var batch_staged_count = document.getElementById("batch-staged-count");
     var lot_select = document.getElementById("batch-transplant-lot-select");
     var lot_quantity_wrap = document.getElementById("armed-lot-quantity-wrap");
@@ -243,13 +242,42 @@
 
     function fetch_shade_grid() {
         if (!shade_layer) return;
-        var on_date = shade_date_input ? shade_date_input.value : "";
+        var on_date = garden_date_input ? garden_date_input.value : "";
         fetch("/beds/" + data.bed_id + "/shade-grid?on_date=" + encodeURIComponent(on_date))
             .then(function (response) {
                 return response.ok ? response.json() : null;
             })
             .then(function (grid) {
                 if (grid) render_shade_grid(grid);
+            });
+    }
+
+    function render_planted_layer() {
+        // Rebuilds #planted-layer from data.plantings -- mirrors the server-side _planting_dot markup
+        // (radius is half the variety's spacing_in, same convention _dot_radius_in uses).
+        clear_children(planted_layer);
+        data.plantings.forEach(function (p) {
+            var radius_in = (p.spacing_in || DEFAULT_SPACING_IN) / 2;
+            var dot = make_circle(p.x_in, p.y_in, radius_in, "planting-dot", p.color_hex);
+            dot.setAttribute("data-planting-id", p.id);
+            dot.setAttribute("data-variety-id", p.variety_id);
+            dot.setAttribute("data-common-name", p.common_name || "");
+            planted_layer.appendChild(dot);
+        });
+    }
+
+    function fetch_plantings_as_of() {
+        if (!planted_layer) return;
+        var on_date = garden_date_input ? garden_date_input.value : "";
+        fetch("/beds/" + data.bed_id + "/plantings-as-of?on_date=" + encodeURIComponent(on_date))
+            .then(function (response) {
+                return response.ok ? response.json() : null;
+            })
+            .then(function (plantings) {
+                if (!plantings) return;
+                data.plantings = plantings;
+                render_planted_layer();
+                render_lattice();
             });
     }
 
@@ -268,11 +296,11 @@
     }
 
     function fetch_shade_warnings() {
-        if (!state.armed_variety || !batch_planted_date_input || !batch_planted_date_input.value) return;
+        if (!state.armed_variety || !garden_date_input || !garden_date_input.value) return;
         var collected = collect_shade_check_points();
         if (!collected.points.length) return;
         var variety_id = state.armed_variety.id;
-        var planted_date = batch_planted_date_input.value;
+        var planted_date = garden_date_input.value;
         post("/beds/" + data.bed_id + "/shade-warnings", {
             variety_id: String(variety_id),
             planted_date: planted_date,
@@ -299,7 +327,7 @@
         if (state.armed_variety) {
             var spacing_in = state.armed_variety.spacing_in || DEFAULT_SPACING_IN;
             var radius_in = spacing_in / 2; // adjacent same-variety circles just touch, never overlap
-            var planted_date = batch_planted_date_input ? batch_planted_date_input.value : "";
+            var planted_date = garden_date_input ? garden_date_input.value : "";
             var cached_warning = function (point) {
                 return !!shade_warning_cache[shade_cache_key(state.armed_variety.id, planted_date, point.x_in, point.y_in)];
             };
@@ -489,11 +517,16 @@
         });
     }
 
-    if (shade_date_input) {
-        shade_date_input.addEventListener("change", fetch_shade_grid);
-    }
-    if (batch_planted_date_input) {
-        batch_planted_date_input.addEventListener("change", fetch_shade_warnings);
+    if (garden_date_input) {
+        // fetch_shade_warnings isn't called directly here -- fetch_plantings_as_of's render_lattice()
+        // already ends with one, using freshly-collected (not stale, pre-rebuild) lattice/staged
+        // elements. Calling it here too would race a second, redundant fetch against that one, each
+        // resolving against a different generation of DOM circles.
+        garden_date_input.addEventListener("change", function () {
+            fetch_shade_grid();
+            fetch_plantings_as_of();
+        });
     }
     fetch_shade_grid();
+    fetch_plantings_as_of();
 })();

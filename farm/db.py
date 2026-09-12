@@ -857,10 +857,16 @@ class FarmDatabaseMixin:
         )
 
     def _insert_milestone_events(self, db_connection, linked_planting_id, variety, planted_date, variety_label, source_type):
-        """Inserts germination-check/harvest rows for a variety's day-range fields, skipping any window that's
-        unknown. Germination-check is additionally gated on source_type == 'seed' -- a transplant already
-        germinated elsewhere (or was purchased), so there's nothing to check on-site.
+        """Inserts plant/germination-check/harvest rows for a planting, skipping any window that's unknown.
+        Germination-check is additionally gated on source_type == 'seed' -- a transplant already germinated
+        elsewhere (or was purchased), so there's nothing to check on-site. The plant reminder is gated on
+        planted_date being in the future -- a planting recorded for today or the past already happened, so
+        there's nothing left to remind about.
         """
+        if date.fromisoformat(planted_date) > date.today():
+            self._insert_farm_event_row(
+                db_connection, "plant", f"Plant: {variety_label}", planted_date, planted_date, linked_planting_id,
+            )
         germination_window = compute_window(
             planted_date, variety["germination_days_min"], variety["germination_days_max"]
         )
@@ -884,7 +890,7 @@ class FarmDatabaseMixin:
         """
         db_connection.execute(
             text(
-                "DELETE FROM farm_events WHERE event_type IN ('germination-check', 'harvest') "
+                "DELETE FROM farm_events WHERE event_type IN ('plant', 'germination-check', 'harvest') "
                 "AND linked_planting_id IN "
                 "(SELECT id FROM plantings WHERE variety_id = :variety_id AND planted_date = :planted_date)"
             ),

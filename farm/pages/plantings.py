@@ -31,6 +31,15 @@ def _parse_date_or_none(value: str):
         return None
 
 
+def _is_alive_on(planting, on_date):
+    "True when a bed-placed planting is showing on the given date: already planted, and not yet past its expected harvest window's end (unknown maturity data never expires it)."
+    planted = _parse_date_or_none(planting["planted_date"])
+    if planted is None or on_date < planted:
+        return False
+    window = compute_window(planting["planted_date"], planting["days_to_maturity_min"], planting["days_to_maturity_max"])
+    return window is None or on_date <= window[1]
+
+
 def _format_window(window):
     if window is None:
         return "-"
@@ -528,6 +537,15 @@ def _palette_item(variety, mode):
     )
 
 
+def _planting_summary(p):
+    "The JSON-able shape of a positioned planting sent to the client -- shared by the bed-detail-data blob and the /plantings-as-of route."
+    return {
+        "id": p["id"], "variety_id": p["variety_id"], "common_name": p["common_name"],
+        "x_in": p["x_in"], "y_in": p["y_in"], "color_hex": p["color_hex"] or "#888888",
+        "spacing_in": p["spacing_in"],
+    }
+
+
 def _bed_detail_data(bed, plantings, seed_stock_varieties, transplant_stock_varieties, transplant_lots_by_variety, companion_rules):
     return {
         "bed_id": bed["id"],
@@ -535,14 +553,7 @@ def _bed_detail_data(bed, plantings, seed_stock_varieties, transplant_stock_vari
         "length_in": bed["length_ft"] * 12,
         "grid_offset_x_in": bed["grid_offset_x_in"],
         "grid_offset_y_in": bed["grid_offset_y_in"],
-        "plantings": [
-            {
-                "id": p["id"], "variety_id": p["variety_id"], "common_name": p["common_name"],
-                "x_in": p["x_in"], "y_in": p["y_in"], "color_hex": p["color_hex"] or "#888888",
-            }
-            for p in plantings
-            if p["x_in"] is not None
-        ],
+        "plantings": [_planting_summary(p) for p in plantings if p["x_in"] is not None],
         "seed_varieties": [
             {
                 "id": v["id"], "common_name": v["common_name"], "name": v["name"],
@@ -574,10 +585,6 @@ def _batch_plant_form(bed_id):
         fast.Input(type="hidden", name="source_type", id="batch-source-type"),
         fast.Input(type="hidden", name="points", id="batch-points"),
         fast.Div(id="batch-staged-count"),
-        fast.Input(
-            name="planted_date", type="date", id="batch-planted-date", required=True,
-            value=date.today().isoformat(),
-        ),
         fast.Input(name="soil_temp_f", type="number", step="0.1", placeholder="Soil temp (F, optional)"),
         fast.Label(
             "Seeds per location:",
@@ -682,15 +689,19 @@ def bed_detail_page(bed_id: int):
         hx_trigger="click",
         hx_on__after_request="document.getElementById('bed-dialog').showModal()",
     )
-    shade_date_picker = fast.Label(
-        "Shade as of:", fast.Input(type="date", id="shade-date", value=date.today().isoformat())
+    garden_date_picker = fast.Label(
+        "Garden as of:",
+        fast.Input(
+            type="date", id="garden-date", name="planted_date", form="batch-plant-form",
+            value=date.today().isoformat(),
+        ),
     )
     return layout(
         f"{plot['name']}-{bed['label']} Detail",
         fast.H1(f"{plot['name']}-{bed['label']} ({bed['width_ft']} x {bed['length_ft']} ft)"),
         fast.A("Back to plot map", href=f"/land-plots/{bed['plot_id']}/map"),
         edit_bed_button,
-        shade_date_picker,
+        garden_date_picker,
         _grid_offset_controls(),
         _zoom_controls(),
         fast.Script(json.dumps(data), type="application/json", id="bed-detail-data"),
@@ -808,6 +819,19 @@ def _shade_warnings_for_points(bed, variety, planted_date_str, parsed_points):
         geometry.shade_exceeds_tolerance(bed, x_in, y_in, planted, maturity_end, variety["sun_needs"], shade_polygons)
         for x_in, y_in in parsed_points
     ]
+
+
+@router("/beds/{bed_id}/plantings-as-of", methods=["get"])
+def bed_plantings_as_of_route(bed_id: int, on_date: str = ""):
+    "Positioned plantings still 'alive' on the given date -- see _is_alive_on. Drives the bed canvas's date-driven garden view."
+    bed = db.get_bed(bed_id)
+    if bed is None:
+        return fast.Response("Bed not found.", status_code=404)
+    day = _parse_date_or_none(on_date) or date.today()
+    plantings = [p for p in db.list_plantings_for_bed(bed_id) if p["x_in"] is not None and _is_alive_on(p, day)]
+    return fast.Response(
+        json.dumps([_planting_summary(p) for p in plantings]), media_type="application/json"
+    )
 
 
 @router("/beds/{bed_id}/shade-grid", methods=["get"])

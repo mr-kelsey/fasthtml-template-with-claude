@@ -1,5 +1,6 @@
 import json
 import time
+from datetime import date, timedelta
 
 import db
 
@@ -44,6 +45,55 @@ def test_arming_a_variety_renders_a_lattice_at_its_spacing(page, live_server_url
     )
     expected = sorted(f"{x},{y}" for x in ("0", "8", "16", "24") for y in ("0", "8", "16", "24"))
     assert points == expected
+
+
+def _plant_with_harvest_window(bed_id, planted_date, days_to_maturity_min=10, days_to_maturity_max=20):
+    db.add_seed_variety(
+        "Tomato", "Cherokee Purple", "Solanaceae", spacing_in=8,
+        days_to_maturity_min=days_to_maturity_min, days_to_maturity_max=days_to_maturity_max, color_hex="#ff0000",
+    )
+    variety_id = db.list_seed_varieties()[0]["id"]
+    db.add_planting(variety_id, planted_date, bed_id=bed_id, x_in=8, y_in=8)
+    return variety_id
+
+
+def test_garden_date_shows_a_planting_still_within_its_harvest_window(page, live_server_url):
+    bed_id = _make_bed(width_ft=2, length_ft=2)
+    _plant_with_harvest_window(bed_id, date.today().isoformat())
+
+    with page.expect_response(lambda r: "/plantings-as-of" in r.url):
+        page.goto(f"{live_server_url}/beds/{bed_id}")
+
+    assert page.locator("#planted-layer circle").count() == 1
+
+
+def test_garden_date_hides_a_planting_past_its_harvest_window(page, live_server_url):
+    bed_id = _make_bed(width_ft=2, length_ft=2)
+    _plant_with_harvest_window(bed_id, date.today().isoformat())
+    page.goto(f"{live_server_url}/beds/{bed_id}")
+
+    future_date = (date.today() + timedelta(days=30)).isoformat()
+    with page.expect_response(lambda r: "/plantings-as-of" in r.url):
+        page.locator("#garden-date").fill(future_date)
+
+    assert page.locator("#planted-layer circle").count() == 0
+
+
+def test_staging_uses_the_garden_date_as_the_batch_planted_date(page, live_server_url):
+    bed_id = _make_bed(width_ft=2, length_ft=2)
+    variety_id = _make_variety(spacing_in=8)
+    _add_seed_lot(variety_id)
+    future_date = (date.today() + timedelta(days=30)).isoformat()
+
+    page.goto(f"{live_server_url}/beds/{bed_id}")
+    page.locator("#garden-date").fill(future_date)
+    _arm_seed_variety(page, variety_id)
+    page.locator('#lattice-layer circle[cx="8"][cy="8"]').click()
+    page.locator("#batch-quantity-per-point").fill("1")
+    with page.expect_navigation():
+        page.locator("#batch-plant-form button[type='submit']").click()
+
+    assert db.list_plantings_for_bed(bed_id)[0]["planted_date"] == future_date
 
 
 def _stage_one_point(page, live_server_url, spacing_in=8, color_hex="#00ff00"):
@@ -199,7 +249,7 @@ def _submit_confirmed_batch(page, live_server_url, lot_quantity_on_hand):
     page.locator('#lattice-layer circle[cx="0"][cy="0"]').click()
 
     page.once("dialog", lambda dialog: dialog.accept())
-    page.locator("#batch-plant-form input[name='planted_date']").fill("2026-05-01")
+    page.locator("#garden-date").fill("2026-05-01")
     with page.expect_navigation():
         page.locator("#batch-plant-form button[type='submit']").click()
     return bed_id, lot_id
@@ -225,7 +275,7 @@ def _dismiss_undercount_batch(page, live_server_url):
     page.locator('#lattice-layer circle[cx="0"][cy="0"]').click()
 
     page.once("dialog", lambda dialog: dialog.dismiss())
-    page.locator("#batch-plant-form input[name='planted_date']").fill("2026-05-01")
+    page.locator("#garden-date").fill("2026-05-01")
     page.locator("#batch-plant-form button[type='submit']").click()
     page.wait_for_timeout(200)
     return bed_id
@@ -262,7 +312,7 @@ def test_shade_tint_appears_for_a_drawn_full_shade_polygon(page, live_server_url
 
     page.goto(f"{live_server_url}/beds/{bed_id}")
     with page.expect_response(lambda r: "/shade-grid" in r.url):
-        page.locator("#shade-date").fill("2026-06-15")
+        page.locator("#garden-date").fill("2026-06-15")
 
     cell = page.locator("#shade-layer rect.shade-cell")
     assert "full_shade" in cell.get_attribute("class")
@@ -281,16 +331,19 @@ def test_shade_warning_marker_appears_for_a_full_sun_variety_in_full_shade(page,
     db.save_shade_polygon(source_id, "summer_solstice", "full", _FULL_COVERAGE_SQUARE)
 
     page.goto(f"{live_server_url}/beds/{bed_id}")
-    _arm_seed_variety(page, variety_id)
+    # Drains the arm-time /shade-warnings request first -- otherwise, if it's still in flight, the
+    # expect_response below can catch that stale response instead of the one triggered by the fill().
     with page.expect_response(lambda r: "/shade-warnings" in r.url):
-        page.locator("#batch-planted-date").fill("2026-06-01")
+        _arm_seed_variety(page, variety_id)
+    with page.expect_response(lambda r: "/shade-warnings" in r.url):
+        page.locator("#garden-date").fill("2026-06-01")
 
     warned = page.locator('#lattice-layer circle[cx="0"][cy="0"]')
     assert "shade-warning" in warned.get_attribute("class")
 
 
 def test_shade_warning_marker_appears_without_manually_setting_planted_date(page, live_server_url):
-    "Regression test: batch-planted-date used to have no default, so fetch_shade_warnings never fired until the gardener manually touched the date field -- it now defaults to today, matching the shade-date picker."
+    "Regression test: the shared #garden-date field (doubling as shade-as-of date and batch planted_date) defaults to today, so fetch_shade_warnings should fire on arming a variety without the gardener manually touching the date field."
     plot_id, bed_id = _make_bed_with_plot(width_ft=2, length_ft=2)  # 24in x 24in
     db.add_seed_variety(
         "Lettuce", "Buttercrunch", "Asteraceae", spacing_in=8, sun_needs="full_sun",
@@ -308,6 +361,47 @@ def test_shade_warning_marker_appears_without_manually_setting_planted_date(page
 
     warned = page.locator('#lattice-layer circle[cx="0"][cy="0"]')
     assert "shade-warning" in warned.get_attribute("class")
+
+
+def _arm_full_sun_variety_over_full_shade(page, live_server_url):
+    plot_id, bed_id = _make_bed_with_plot(width_ft=2, length_ft=2)  # 24in x 24in
+    db.add_seed_variety(
+        "Lettuce", "Buttercrunch", "Asteraceae", spacing_in=8, sun_needs="full_sun",
+        days_to_maturity_min=1, days_to_maturity_max=5, color_hex="#00ff00",
+    )
+    variety_id = db.list_seed_varieties()[0]["id"]
+    _add_seed_lot(variety_id)
+    db.add_shade_source(plot_id, "Oak tree")
+    source_id = db.list_shade_sources_for_plot(plot_id)[0]["id"]
+    db.save_shade_polygon(source_id, "summer_solstice", "full", _FULL_COVERAGE_SQUARE)
+
+    page.goto(f"{live_server_url}/beds/{bed_id}")
+    with page.expect_response(lambda r: "/shade-warnings" in r.url):
+        _arm_seed_variety(page, variety_id)
+    return bed_id, variety_id
+
+
+def test_shade_warning_marker_appears_on_a_stamped_point(page, live_server_url):
+    "Regression test: stamping (staging) a point used to leave the just-clicked lattice point's shade-warning outline off the resulting staged dot."
+    _arm_full_sun_variety_over_full_shade(page, live_server_url)
+    with page.expect_response(lambda r: "/shade-warnings" in r.url):
+        page.locator('#lattice-layer circle[cx="0"][cy="0"]').click()
+
+    staged = page.locator('#staged-layer circle[cx="0"][cy="0"]')
+    assert "shade-warning" in staged.get_attribute("class")
+
+
+def test_shade_warning_on_a_stamped_point_survives_changing_the_garden_date(page, live_server_url):
+    "Regression test: merging #shade-date/#batch-planted-date into one #garden-date field, which now also refetches plantings-as-of on change, must not race the staged dot's shade-warning class back off."
+    _arm_full_sun_variety_over_full_shade(page, live_server_url)
+    with page.expect_response(lambda r: "/shade-warnings" in r.url):
+        page.locator('#lattice-layer circle[cx="0"][cy="0"]').click()
+
+    with page.expect_response(lambda r: "/shade-warnings" in r.url):
+        page.locator("#garden-date").fill("2026-06-15")
+
+    staged = page.locator('#staged-layer circle[cx="0"][cy="0"]')
+    assert "shade-warning" in staged.get_attribute("class")
 
 
 def test_clicking_right_arrow_shifts_the_lattice_one_inch(page, live_server_url):
