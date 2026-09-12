@@ -1,7 +1,7 @@
 from fasthtml import common as fast
 
 from farm.layout import layout
-from farm.helpers import parse_optional_int, parse_optional_date
+from farm.helpers import parse_optional_int, parse_optional_date, default_acquired_date
 import db
 
 router = fast.APIRouter()
@@ -215,7 +215,8 @@ def add_seed_lot_route(
     if not ok:
         return fast.Response("Acquired date must be a valid date.", status_code=422)
     db.add_seed_lot(
-        validated_variety_id, quantity_on_hand=quantity_on_hand, acquired_date=acquired_date,
+        validated_variety_id, quantity_on_hand=quantity_on_hand,
+        acquired_date=acquired_date or default_acquired_date(),
         seed_source=seed_source.strip() or None, notes=notes.strip() or None,
     )
     return fast.Redirect("/inventory")
@@ -252,7 +253,8 @@ def update_seed_lot_route(
     if not ok:
         return fast.Response("Acquired date must be a valid date.", status_code=422)
     db.update_seed_lot(
-        seed_lot_id, quantity_on_hand=quantity_on_hand, acquired_date=acquired_date,
+        seed_lot_id, quantity_on_hand=quantity_on_hand,
+        acquired_date=acquired_date or default_acquired_date(),
         seed_source=seed_source.strip() or None, notes=notes.strip() or None,
     )
     return fast.Redirect("/inventory")

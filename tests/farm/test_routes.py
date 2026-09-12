@@ -370,6 +370,27 @@ def test_add_seed_lot_rejects_invalid_acquired_date(client):
     assert response.status_code == 422
 
 
+def _a_year_prior(on_date):
+    try:
+        return on_date.replace(year=on_date.year - 1).isoformat()
+    except ValueError:
+        return on_date.replace(month=2, day=28, year=on_date.year - 1).isoformat()
+
+
+def test_add_seed_lot_defaults_acquired_date_to_a_year_prior_when_left_blank(client):
+    variety_id = _create_variety(client)
+    client.post("/seed-lots", data={"variety_id": str(variety_id)})
+    lot = db.list_seed_lots()[0]
+    assert lot["acquired_date"] == _a_year_prior(date.today())
+
+
+def test_add_seed_lot_preserves_an_explicit_acquired_date(client):
+    variety_id = _create_variety(client)
+    client.post("/seed-lots", data={"variety_id": str(variety_id), "acquired_date": "2020-05-01"})
+    lot = db.list_seed_lots()[0]
+    assert lot["acquired_date"] == "2020-05-01"
+
+
 def test_edit_seed_lot_page_returns_200(client):
     variety_id = _create_variety(client)
     client.post("/seed-lots", data={"variety_id": str(variety_id)})
@@ -389,6 +410,14 @@ def test_edit_seed_lot_updates_quantity(client):
     lot_id = db.list_seed_lots()[0]["id"]
     client.post(f"/seed-lots/{lot_id}/edit", data={"quantity_on_hand": "30"})
     assert db.get_seed_lot(lot_id)["quantity_on_hand"] == 30
+
+
+def test_edit_seed_lot_defaults_acquired_date_to_a_year_prior_when_cleared(client):
+    variety_id = _create_variety(client)
+    client.post("/seed-lots", data={"variety_id": str(variety_id), "acquired_date": "2020-05-01"})
+    lot_id = db.list_seed_lots()[0]["id"]
+    client.post(f"/seed-lots/{lot_id}/edit", data={})
+    assert db.get_seed_lot(lot_id)["acquired_date"] == _a_year_prior(date.today())
 
 
 def test_delete_seed_lot_removes_it(client):

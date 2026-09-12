@@ -74,6 +74,19 @@ def parse_optional_date(value: str):
         return False, None
 
 
+def default_acquired_date():
+    """ISO date string for a year prior to today. Undated seed lots default here rather than to
+    NULL or today -- an unlabeled jar of seeds is more likely to be from last year's harvest/purchase
+    than freshly acquired, and a real date keeps farm/db.py's _decrement_seed_stock oldest-lot-first
+    draw-down ordering meaningful instead of falling back to NULL-last/id order."""
+    today = date.today()
+    try:
+        return today.replace(year=today.year - 1).isoformat()
+    except ValueError:
+        # today is Feb 29 and year - 1 isn't a leap year -- nearest equivalent is Feb 28.
+        return today.replace(month=2, day=28, year=today.year - 1).isoformat()
+
+
 def parse_required_int(value: str, field_label: str):
     "Returns (int, None) or (None, error_message) if value is blank or not a valid integer."
     if value is None or value.strip() == "":

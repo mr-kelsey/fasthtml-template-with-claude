@@ -238,53 +238,47 @@ _FARM_EVENT_COLUMNS = (
     "fe.linked_planting_id, fe.linked_product_application_id, fe.created_at"
 )
 
+_PLANTING_OPTIONAL_FIELDS = (
+    "bed_id", "location", "quantity", "quantity_germinated", "quantity_culled", "notes",
+    "x_in", "y_in", "seed_lot_id", "transplant_lot_id", "source_type", "soil_temp_f",
+)
+_PLANTING_TEXT_FIELDS = ("location", "notes")
+_PLANTING_FIELD_DEFAULTS = {"source_type": "seed"}
 
-def _agronomic_fields(
-    germination_days_min: int,
-    germination_days_max: int,
-    days_to_maturity_min: int,
-    days_to_maturity_max: int,
-    spacing_in: int,
-    sun_needs: str,
-    water_needs: str,
-):
-    "Builds the dict of the 5 numeric + 2 text agronomic columns shared by every seed_varieties row."
-    return {
-        "germination_days_min": germination_days_min,
-        "germination_days_max": germination_days_max,
-        "days_to_maturity_min": days_to_maturity_min,
-        "days_to_maturity_max": days_to_maturity_max,
-        "spacing_in": spacing_in,
-        "sun_needs": sun_needs or None,
-        "water_needs": water_needs or None,
-    }
+_GARDEN_PRODUCT_OPTIONAL_FIELDS = ("product_type", "npk_n", "npk_p", "npk_k", "benefit_notes", "application_frequency_days")
+_GARDEN_PRODUCT_TEXT_FIELDS = ("product_type", "benefit_notes")
 
 
-def _soil_feeding_fields(
-    soil_type: str,
-    soil_ph_min: float,
-    soil_ph_max: float,
-    feeding_frequency_days: int,
-    growth_npk_n: float,
-    growth_npk_p: float,
-    growth_npk_k: float,
-    produce_npk_n: float,
-    produce_npk_p: float,
-    produce_npk_k: float,
-):
-    "Builds the dict of the soil/feeding columns shared by every seed_varieties row."
-    return {
-        "soil_type": soil_type or None,
-        "soil_ph_min": soil_ph_min,
-        "soil_ph_max": soil_ph_max,
-        "feeding_frequency_days": feeding_frequency_days,
-        "growth_npk_n": growth_npk_n,
-        "growth_npk_p": growth_npk_p,
-        "growth_npk_k": growth_npk_k,
-        "produce_npk_n": produce_npk_n,
-        "produce_npk_p": produce_npk_p,
-        "produce_npk_k": produce_npk_k,
-    }
+def _normalize_fields(allowed_fields, text_fields, kwargs, defaults=None):
+    """Builds a dict with one key per allowed_fields name (missing keys default to None, or to
+    `defaults[name]` when given), then collapses blank/falsy text_fields to NULL. Shared by every
+    add_X/update_X pair's field-normalization helper below, so the pair can take **kwargs instead
+    of each redeclaring the same long parameter list. Raises TypeError on an unrecognized keyword,
+    mirroring the TypeError a normal keyword-only signature would already have raised."""
+    defaults = defaults or {}
+    unknown = set(kwargs) - set(allowed_fields)
+    if unknown:
+        raise TypeError(f"Unexpected keyword argument(s): {', '.join(sorted(unknown))}")
+    fields = {name: kwargs.get(name, defaults.get(name)) for name in allowed_fields}
+    for name in text_fields:
+        fields[name] = fields[name] or None
+    return fields
+
+
+_SEED_VARIETY_OPTIONAL_FIELDS = (
+    "genus", "species",
+    "germination_days_min", "germination_days_max", "days_to_maturity_min", "days_to_maturity_max",
+    "spacing_in", "sun_needs", "water_needs",
+    "soil_type", "soil_ph_min", "soil_ph_max", "feeding_frequency_days",
+    "growth_npk_n", "growth_npk_p", "growth_npk_k", "produce_npk_n", "produce_npk_p", "produce_npk_k",
+    "color_hex",
+)
+_SEED_VARIETY_TEXT_FIELDS = ("genus", "species", "sun_needs", "water_needs", "soil_type", "color_hex")
+
+
+def _seed_variety_fields(**kwargs):
+    "Builds the dict of every optional seed_varieties column shared by add_seed_variety/update_seed_variety."
+    return _normalize_fields(_SEED_VARIETY_OPTIONAL_FIELDS, _SEED_VARIETY_TEXT_FIELDS, kwargs)
 
 
 class FarmDatabaseMixin:
@@ -305,40 +299,9 @@ class FarmDatabaseMixin:
                 {"id": variety_id},
             ).mappings().first()
 
-    def add_seed_variety(
-        self,
-        common_name: str,
-        name: str,
-        plant_family: str,
-        genus: str = None,
-        species: str = None,
-        germination_days_min: int = None,
-        germination_days_max: int = None,
-        days_to_maturity_min: int = None,
-        days_to_maturity_max: int = None,
-        spacing_in: int = None,
-        sun_needs: str = None,
-        water_needs: str = None,
-        soil_type: str = None,
-        soil_ph_min: float = None,
-        soil_ph_max: float = None,
-        feeding_frequency_days: int = None,
-        growth_npk_n: float = None,
-        growth_npk_p: float = None,
-        growth_npk_k: float = None,
-        produce_npk_n: float = None,
-        produce_npk_p: float = None,
-        produce_npk_k: float = None,
-        color_hex: str = None,
-    ):
-        fields = _agronomic_fields(
-            germination_days_min, germination_days_max, days_to_maturity_min, days_to_maturity_max,
-            spacing_in, sun_needs, water_needs,
-        )
-        fields.update(_soil_feeding_fields(
-            soil_type, soil_ph_min, soil_ph_max, feeding_frequency_days,
-            growth_npk_n, growth_npk_p, growth_npk_k, produce_npk_n, produce_npk_p, produce_npk_k,
-        ))
+    def add_seed_variety(self, common_name: str, name: str, plant_family: str, **kwargs):
+        "Optional keyword fields: see _SEED_VARIETY_OPTIONAL_FIELDS (genus/species/agronomic/soil-feeding/color_hex)."
+        fields = _seed_variety_fields(**kwargs)
         with self.engine.begin() as db_connection:
             db_connection.execute(
                 text(
@@ -355,47 +318,12 @@ class FarmDatabaseMixin:
                     ":growth_npk_n, :growth_npk_p, :growth_npk_k, :produce_npk_n, :produce_npk_p, :produce_npk_k, "
                     ":color_hex)"
                 ),
-                {
-                    "common_name": common_name, "name": name, "plant_family": plant_family,
-                    "genus": genus or None, "species": species or None, "color_hex": color_hex or None, **fields,
-                },
+                {"common_name": common_name, "name": name, "plant_family": plant_family, **fields},
             )
 
-    def update_seed_variety(
-        self,
-        variety_id: int,
-        common_name: str,
-        name: str,
-        plant_family: str,
-        genus: str = None,
-        species: str = None,
-        germination_days_min: int = None,
-        germination_days_max: int = None,
-        days_to_maturity_min: int = None,
-        days_to_maturity_max: int = None,
-        spacing_in: int = None,
-        sun_needs: str = None,
-        water_needs: str = None,
-        soil_type: str = None,
-        soil_ph_min: float = None,
-        soil_ph_max: float = None,
-        feeding_frequency_days: int = None,
-        growth_npk_n: float = None,
-        growth_npk_p: float = None,
-        growth_npk_k: float = None,
-        produce_npk_n: float = None,
-        produce_npk_p: float = None,
-        produce_npk_k: float = None,
-        color_hex: str = None,
-    ):
-        fields = _agronomic_fields(
-            germination_days_min, germination_days_max, days_to_maturity_min, days_to_maturity_max,
-            spacing_in, sun_needs, water_needs,
-        )
-        fields.update(_soil_feeding_fields(
-            soil_type, soil_ph_min, soil_ph_max, feeding_frequency_days,
-            growth_npk_n, growth_npk_p, growth_npk_k, produce_npk_n, produce_npk_p, produce_npk_k,
-        ))
+    def update_seed_variety(self, variety_id: int, common_name: str, name: str, plant_family: str, **kwargs):
+        "Optional keyword fields: see _SEED_VARIETY_OPTIONAL_FIELDS (genus/species/agronomic/soil-feeding/color_hex)."
+        fields = _seed_variety_fields(**kwargs)
         with self.engine.begin() as db_connection:
             db_connection.execute(
                 text(
@@ -411,10 +339,7 @@ class FarmDatabaseMixin:
                     "color_hex = :color_hex "
                     "WHERE id = :id"
                 ),
-                {
-                    "id": variety_id, "common_name": common_name, "name": name, "plant_family": plant_family,
-                    "genus": genus or None, "species": species or None, "color_hex": color_hex or None, **fields,
-                },
+                {"id": variety_id, "common_name": common_name, "name": name, "plant_family": plant_family, **fields},
             )
 
     def delete_seed_variety(self, variety_id: int):
@@ -717,47 +642,13 @@ class FarmDatabaseMixin:
             ).mappings().first()
 
     @staticmethod
-    def _normalize_planting_fields(
-        bed_id, location, quantity, quantity_germinated, notes, x_in=None, y_in=None, seed_lot_id=None,
-        transplant_lot_id=None, source_type="seed", soil_temp_f=None, quantity_culled=None,
-    ):
-        return {
-            "bed_id": bed_id,
-            "location": location or None,
-            "quantity": quantity,
-            "quantity_germinated": quantity_germinated,
-            "quantity_culled": quantity_culled,
-            "notes": notes or None,
-            "x_in": x_in,
-            "y_in": y_in,
-            "seed_lot_id": seed_lot_id,
-            "transplant_lot_id": transplant_lot_id,
-            "source_type": source_type,
-            "soil_temp_f": soil_temp_f,
-        }
+    def _normalize_planting_fields(**kwargs):
+        "Builds the dict of every optional plantings column shared by add_planting/update_planting."
+        return _normalize_fields(_PLANTING_OPTIONAL_FIELDS, _PLANTING_TEXT_FIELDS, kwargs, _PLANTING_FIELD_DEFAULTS)
 
-    def add_planting(
-        self,
-        variety_id: int,
-        planted_date: str,
-        bed_id: int = None,
-        location: str = None,
-        quantity: int = None,
-        quantity_germinated: int = None,
-        notes: str = None,
-        x_in: float = None,
-        y_in: float = None,
-        seed_lot_id: int = None,
-        transplant_lot_id: int = None,
-        source_type: str = "seed",
-        soil_temp_f: float = None,
-        quantity_culled: int = None,
-    ):
-        "Returns the new planting's id. Regenerates the (variety, planted_date) group's linked farm_events."
-        fields = self._normalize_planting_fields(
-            bed_id, location, quantity, quantity_germinated, notes, x_in, y_in, seed_lot_id,
-            transplant_lot_id, source_type, soil_temp_f, quantity_culled,
-        )
+    def add_planting(self, variety_id: int, planted_date: str, **kwargs):
+        "Returns the new planting's id. Regenerates the (variety, planted_date) group's linked farm_events. Optional keyword fields: see _PLANTING_OPTIONAL_FIELDS."
+        fields = self._normalize_planting_fields(**kwargs)
         with self.engine.begin() as db_connection:
             result = db_connection.execute(
                 text(
@@ -854,28 +745,9 @@ class FarmDatabaseMixin:
             )
             remaining -= taken
 
-    def update_planting(
-        self,
-        planting_id: int,
-        variety_id: int,
-        planted_date: str,
-        bed_id: int = None,
-        location: str = None,
-        quantity: int = None,
-        quantity_germinated: int = None,
-        notes: str = None,
-        x_in: float = None,
-        y_in: float = None,
-        seed_lot_id: int = None,
-        transplant_lot_id: int = None,
-        source_type: str = "seed",
-        soil_temp_f: float = None,
-        quantity_culled: int = None,
-    ):
-        fields = self._normalize_planting_fields(
-            bed_id, location, quantity, quantity_germinated, notes, x_in, y_in, seed_lot_id,
-            transplant_lot_id, source_type, soil_temp_f, quantity_culled,
-        )
+    def update_planting(self, planting_id: int, variety_id: int, planted_date: str, **kwargs):
+        "Optional keyword fields: see _PLANTING_OPTIONAL_FIELDS."
+        fields = self._normalize_planting_fields(**kwargs)
         with self.engine.begin() as db_connection:
             old = db_connection.execute(
                 text("SELECT variety_id, planted_date FROM plantings WHERE id = :id"), {"id": planting_id}
@@ -1213,29 +1085,13 @@ class FarmDatabaseMixin:
             ).mappings().first()
 
     @staticmethod
-    def _normalize_garden_product_fields(product_type, npk_n, npk_p, npk_k, benefit_notes, application_frequency_days):
-        return {
-            "product_type": product_type or None,
-            "npk_n": npk_n,
-            "npk_p": npk_p,
-            "npk_k": npk_k,
-            "benefit_notes": benefit_notes or None,
-            "application_frequency_days": application_frequency_days,
-        }
+    def _normalize_garden_product_fields(**kwargs):
+        "Builds the dict of every optional garden_products column shared by add_garden_product/update_garden_product."
+        return _normalize_fields(_GARDEN_PRODUCT_OPTIONAL_FIELDS, _GARDEN_PRODUCT_TEXT_FIELDS, kwargs)
 
-    def add_garden_product(
-        self,
-        name: str,
-        product_type: str = None,
-        npk_n: float = None,
-        npk_p: float = None,
-        npk_k: float = None,
-        benefit_notes: str = None,
-        application_frequency_days: int = None,
-    ):
-        fields = self._normalize_garden_product_fields(
-            product_type, npk_n, npk_p, npk_k, benefit_notes, application_frequency_days
-        )
+    def add_garden_product(self, name: str, **kwargs):
+        "Optional keyword fields: see _GARDEN_PRODUCT_OPTIONAL_FIELDS."
+        fields = self._normalize_garden_product_fields(**kwargs)
         with self.engine.begin() as db_connection:
             db_connection.execute(
                 text(
@@ -1247,20 +1103,9 @@ class FarmDatabaseMixin:
                 {"name": name, **fields},
             )
 
-    def update_garden_product(
-        self,
-        product_id: int,
-        name: str,
-        product_type: str = None,
-        npk_n: float = None,
-        npk_p: float = None,
-        npk_k: float = None,
-        benefit_notes: str = None,
-        application_frequency_days: int = None,
-    ):
-        fields = self._normalize_garden_product_fields(
-            product_type, npk_n, npk_p, npk_k, benefit_notes, application_frequency_days
-        )
+    def update_garden_product(self, product_id: int, name: str, **kwargs):
+        "Optional keyword fields: see _GARDEN_PRODUCT_OPTIONAL_FIELDS."
+        fields = self._normalize_garden_product_fields(**kwargs)
         with self.engine.begin() as db_connection:
             db_connection.execute(
                 text(
