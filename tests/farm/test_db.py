@@ -1,5 +1,7 @@
 from datetime import date, timedelta
 
+from sqlalchemy import text
+
 import db
 
 ALL_TIME = ("2000-01-01", "2100-01-01")
@@ -1591,34 +1593,71 @@ def _add_planting_for_harvest(**kwargs):
 
 def test_add_harvest_persists_weight_and_date():
     planting_id = _add_planting_for_harvest()
-    db.add_harvest(planting_id, "2026-08-01", 3.5)
+    db.add_harvest([planting_id], "2026-08-01", 3.5)
     harvest = db.list_harvests_for_planting(planting_id)[0]
     assert (harvest["harvest_date"], harvest["weight_lb"]) == ("2026-08-01", 3.5)
 
 
 def test_add_harvest_persists_notes():
     planting_id = _add_planting_for_harvest()
-    db.add_harvest(planting_id, "2026-08-01", 3.5, notes="First picking")
+    db.add_harvest([planting_id], "2026-08-01", 3.5, notes="First picking")
     assert db.list_harvests_for_planting(planting_id)[0]["notes"] == "First picking"
+
+
+def test_add_harvest_across_multiple_plantings_appears_for_each():
+    planting_id = _add_planting_for_harvest()
+    other_id = _add_planting_for_harvest()
+    db.add_harvest([planting_id, other_id], "2026-08-01", 6.0)
+    assert db.list_harvests_for_planting(planting_id) == db.list_harvests_for_planting(other_id)
 
 
 def test_list_harvests_for_planting_orders_by_date_descending():
     planting_id = _add_planting_for_harvest()
-    db.add_harvest(planting_id, "2026-08-01", 1.0)
-    db.add_harvest(planting_id, "2026-08-15", 2.0)
+    db.add_harvest([planting_id], "2026-08-01", 1.0)
+    db.add_harvest([planting_id], "2026-08-15", 2.0)
     assert [h["harvest_date"] for h in db.list_harvests_for_planting(planting_id)] == ["2026-08-15", "2026-08-01"]
 
 
 def test_list_harvests_for_planting_excludes_other_plantings():
     planting_id = _add_planting_for_harvest()
     other_id = _add_planting_for_harvest()
-    db.add_harvest(other_id, "2026-08-01", 1.0)
+    db.add_harvest([other_id], "2026-08-01", 1.0)
     assert db.list_harvests_for_planting(planting_id) == []
+
+
+def test_list_harvest_shares_for_planting_is_one_when_harvest_covers_only_that_planting():
+    planting_id = _add_planting_for_harvest()
+    db.add_harvest([planting_id], "2026-08-01", 3.5)
+    assert db.list_harvest_shares_for_planting(planting_id)[0]["plantings_in_harvest"] == 1
+
+
+def test_list_harvest_shares_for_planting_counts_every_tagged_planting():
+    planting_id = _add_planting_for_harvest()
+    other_id = _add_planting_for_harvest()
+    db.add_harvest([planting_id, other_id], "2026-08-01", 6.0)
+    assert db.list_harvest_shares_for_planting(planting_id)[0]["plantings_in_harvest"] == 2
+
+
+def test_list_harvests_for_group_includes_harvest_touching_any_group_member():
+    variety_id = _add_variety()
+    planting_id = db.add_planting(variety_id, "2026-05-01")
+    other_id = db.add_planting(variety_id, "2026-05-01")
+    db.add_harvest([other_id], "2026-08-01", 1.0)
+    harvests = db.list_harvests_for_group(variety_id, "2026-05-01")
+    assert [h["weight_lb"] for h in harvests] == [1.0]
+
+
+def test_get_harvest_planting_ids_returns_every_tagged_planting():
+    planting_id = _add_planting_for_harvest()
+    other_id = _add_planting_for_harvest()
+    db.add_harvest([planting_id, other_id], "2026-08-01", 6.0)
+    harvest_id = db.list_harvests_for_planting(planting_id)[0]["id"]
+    assert db.get_harvest_planting_ids(harvest_id) == sorted([planting_id, other_id])
 
 
 def test_get_harvest_returns_matching_row():
     planting_id = _add_planting_for_harvest()
-    db.add_harvest(planting_id, "2026-08-01", 3.5)
+    db.add_harvest([planting_id], "2026-08-01", 3.5)
     harvest_id = db.list_harvests_for_planting(planting_id)[0]["id"]
     assert db.get_harvest(harvest_id)["weight_lb"] == 3.5
 
@@ -1629,7 +1668,7 @@ def test_get_harvest_returns_none_when_not_found():
 
 def test_update_harvest_persists_changes():
     planting_id = _add_planting_for_harvest()
-    db.add_harvest(planting_id, "2026-08-01", 3.5)
+    db.add_harvest([planting_id], "2026-08-01", 3.5)
     harvest_id = db.list_harvests_for_planting(planting_id)[0]["id"]
     db.update_harvest(harvest_id, "2026-08-02", 4.5, notes="Corrected")
     harvest = db.get_harvest(harvest_id)
@@ -1638,11 +1677,25 @@ def test_update_harvest_persists_changes():
 
 def test_delete_harvest_removes_row():
     planting_id = _add_planting_for_harvest()
-    db.add_harvest(planting_id, "2026-08-01", 3.5)
+    db.add_harvest([planting_id], "2026-08-01", 3.5)
     harvest_id = db.list_harvests_for_planting(planting_id)[0]["id"]
     db.delete_harvest(harvest_id)
     assert db.list_harvests_for_planting(planting_id) == []
 
 
+def test_delete_harvest_removes_its_harvest_plantings_rows():
+    planting_id = _add_planting_for_harvest()
+    db.add_harvest([planting_id], "2026-08-01", 3.5)
+    harvest_id = db.list_harvests_for_planting(planting_id)[0]["id"]
+    db.delete_harvest(harvest_id)
+    assert db.get_harvest_planting_ids(harvest_id) == []
+
+
 def test_delete_nonexistent_harvest_is_a_noop():
     db.delete_harvest(999999)
+
+
+def test_harvests_table_has_no_planting_id_column_after_migration():
+    with db.engine.connect() as db_connection:
+        columns = {row[1] for row in db_connection.execute(text("PRAGMA table_info(harvests)")).all()}
+    assert "planting_id" not in columns

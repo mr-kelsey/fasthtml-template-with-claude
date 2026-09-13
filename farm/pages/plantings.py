@@ -258,39 +258,78 @@ def add_planting_route(
     return fast.Redirect("/plantings")
 
 
-def _yield_summary(planting, harvests):
-    "Living plants, total harvested, and computed (not stored) yield-per-plant, alongside the harvest log."
-    living = None
-    if planting["quantity_germinated"] is not None:
-        living = planting["quantity_germinated"] - (planting["quantity_culled"] or 0)
-    total_weight = sum(h["weight_lb"] for h in harvests)
+def _living_count(planting):
+    if planting["quantity_germinated"] is None:
+        return None
+    return planting["quantity_germinated"] - (planting["quantity_culled"] or 0)
+
+
+def _harvest_batch_form(action, plantings, checked_ids, redirect_fields=()):
+    """Checkbox per planting (id + sown/living counts) plus one shared harvest_date/weight_lb/notes
+    form -- basket-then-weigh harvesting means one weighing can cover several plants at once, so
+    this always POSTs a list of planting_ids alongside the harvest fields, even when only one box
+    is checked. Shared by the single-planting yield summary and the calendar's group Record page."""
+    def _row(p):
+        sown = p["quantity"] if p["quantity"] is not None else "?"
+        living = _living_count(p)
+        label = f"#{p['id']} (sown: {sown}" + (f", living: {living})" if living is not None else ")")
+        return fast.Label(
+            fast.Input(type="checkbox", name="planting_ids", value=str(p["id"]), checked=p["id"] in checked_ids),
+            " ", label,
+        )
+
+    return fast.Form(
+        fast.Div(*[_row(p) for p in plantings]),
+        fast.Input(name="harvest_date", type="date", required=True),
+        fast.Input(name="weight_lb", type="number", step="0.01", placeholder="Weight (lb)", required=True),
+        fast.Textarea("", name="notes", placeholder="Notes (optional)"),
+        *redirect_fields,
+        fast.Button("Log Harvest", type="submit"),
+        method="post",
+        action=action,
+    )
+
+
+def _yield_summary(planting, harvest_shares):
+    "Living plants, total harvested (even split across a harvest's tagged plantings), and computed yield-per-plant."
+    living = _living_count(planting)
+    total_weight = sum(h["weight_lb"] / h["plantings_in_harvest"] for h in harvest_shares)
     yield_per_plant = total_weight / living if living else None
+
+    def _harvest_line(h):
+        line = f"{h['harvest_date']}: {h['weight_lb']} lb"
+        if h["plantings_in_harvest"] > 1:
+            line += f" (this planting's share: {h['weight_lb'] / h['plantings_in_harvest']:.2f} lb)"
+        if h["notes"]:
+            line += f" — {h['notes']}"
+        return line
+
     harvest_rows = [
         fast.Li(
-            f"{h['harvest_date']}: {h['weight_lb']} lb" + (f" — {h['notes']}" if h["notes"] else ""),
+            _harvest_line(h),
             " ",
             fast.A("Edit", href=f"/harvests/{h['id']}/edit"),
             fast.Form(
                 fast.Button("Delete", type="submit"), method="post", action=f"/harvests/{h['id']}/delete"
             ),
         )
-        for h in harvests
+        for h in harvest_shares
+    ]
+    siblings = [
+        p for p in db.list_plantings_in_group(planting["variety_id"], planting["planted_date"]) if p["id"] != planting["id"]
     ]
     return fast.Div(
         fast.H2("Yield"),
         fast.P(f"Living plants: {living if living is not None else 'unknown'}"),
-        fast.P(f"Total harvested: {total_weight} lb") if harvests else fast.P("No harvests logged yet."),
+        fast.P(f"Total harvested (this planting's share): {total_weight:.2f} lb") if harvest_shares else fast.P("No harvests logged yet."),
         fast.P(f"Yield per plant: {yield_per_plant:.2f} lb/plant") if yield_per_plant is not None else "",
-        fast.H3("Harvest history") if harvests else "",
-        fast.Ul(*harvest_rows) if harvests else "",
+        fast.H3("Harvest history") if harvest_shares else "",
+        fast.Ul(*harvest_rows) if harvest_shares else "",
         fast.H3("Log a harvest"),
-        fast.Form(
-            fast.Input(name="harvest_date", type="date", required=True),
-            fast.Input(name="weight_lb", type="number", step="0.01", placeholder="Weight (lb)", required=True),
-            fast.Textarea("", name="notes", placeholder="Notes (optional)"),
-            fast.Button("Log Harvest", type="submit"),
-            method="post",
+        _harvest_batch_form(
             action=f"/plantings/{planting['id']}/harvests",
+            plantings=[planting, *siblings],
+            checked_ids={planting["id"]},
         ),
     )
 
@@ -309,7 +348,7 @@ def edit_planting_page(planting_id: int):
             varieties=db.list_seed_varieties(),
             planting=planting,
         ),
-        _yield_summary(planting, db.list_harvests_for_planting(planting_id)),
+        _yield_summary(planting, db.list_harvest_shares_for_planting(planting_id)),
     )
 
 
@@ -361,8 +400,25 @@ def _validate_harvest_fields(harvest_date, weight_lb):
     return harvest_date, weight_lb
 
 
+def _validate_planting_ids(raw_ids):
+    "Returns a nonempty list[int] or an error fast.Response."
+    try:
+        ids = [int(raw) for raw in raw_ids]
+    except (TypeError, ValueError):
+        return fast.Response("Invalid planting selected.", status_code=422)
+    if not ids:
+        return fast.Response("Select at least one planting to log this harvest against.", status_code=422)
+    return ids
+
+
+def _redirect_to_a_tagged_planting(harvest_id):
+    "Edit/delete redirect target: any one planting this harvest is tagged against, else the plain list."
+    ids = db.get_harvest_planting_ids(harvest_id)
+    return fast.Redirect(f"/plantings/{ids[0]}/edit" if ids else "/plantings")
+
+
 @router("/plantings/{planting_id}/harvests", methods=["post"])
-def add_harvest_route(planting_id: int, harvest_date: str, weight_lb: str, notes: str = ""):
+def add_harvest_route(planting_id: int, harvest_date: str, weight_lb: str, planting_ids: list[str] = None, notes: str = ""):
     planting = db.get_planting(planting_id)
     if planting is None:
         return fast.Response("Planting not found.", status_code=404)
@@ -370,12 +426,16 @@ def add_harvest_route(planting_id: int, harvest_date: str, weight_lb: str, notes
     if isinstance(validated, fast.Response):
         return validated
     harvest_date, weight_lb = validated
-    db.add_harvest(planting_id, harvest_date, weight_lb, notes=notes.strip() or None)
+    ids = _validate_planting_ids(planting_ids or [])
+    if isinstance(ids, fast.Response):
+        return ids
+    db.add_harvest(ids, harvest_date, weight_lb, notes=notes.strip() or None)
     return fast.Redirect(f"/plantings/{planting_id}/edit")
 
 
-def _harvest_form(action, harvest):
+def _harvest_form(action, harvest, planting_ids):
     return fast.Form(
+        fast.P("Plantings covered: " + ", ".join(f"#{i}" for i in planting_ids)),
         fast.Input(name="harvest_date", type="date", value=harvest["harvest_date"], required=True),
         fast.Input(name="weight_lb", type="number", step="0.01", value=harvest["weight_lb"], required=True),
         fast.Textarea(harvest["notes"] or "", name="notes", placeholder="Notes (optional)"),
@@ -393,7 +453,7 @@ def edit_harvest_page(harvest_id: int):
     return layout(
         "Edit Harvest",
         fast.H1("Edit Harvest"),
-        _harvest_form(action=f"/harvests/{harvest_id}/edit", harvest=harvest),
+        _harvest_form(action=f"/harvests/{harvest_id}/edit", harvest=harvest, planting_ids=db.get_harvest_planting_ids(harvest_id)),
     )
 
 
@@ -407,7 +467,7 @@ def update_harvest_route(harvest_id: int, harvest_date: str, weight_lb: str, not
         return validated
     harvest_date, weight_lb = validated
     db.update_harvest(harvest_id, harvest_date, weight_lb, notes=notes.strip() or None)
-    return fast.Redirect(f"/plantings/{harvest['planting_id']}/edit")
+    return _redirect_to_a_tagged_planting(harvest_id)
 
 
 @router("/harvests/{harvest_id}/delete", methods=["post"])
@@ -415,8 +475,9 @@ def delete_harvest_route(harvest_id: int):
     harvest = db.get_harvest(harvest_id)
     if harvest is None:
         return fast.Redirect("/plantings")
+    redirect = _redirect_to_a_tagged_planting(harvest_id)
     db.delete_harvest(harvest_id)
-    return fast.Redirect(f"/plantings/{harvest['planting_id']}/edit")
+    return redirect
 
 
 @router("/plantings/{planting_id}/delete", methods=["post"])
@@ -640,7 +701,7 @@ def _zoom_controls():
 
 
 @router("/beds/{bed_id}", methods=["get"])
-def bed_detail_page(bed_id: int):
+def bed_detail_page(bed_id: int, on_date: str = None):
     bed = db.get_bed(bed_id)
     if bed is None:
         return fast.Response("Bed not found.", status_code=404)
@@ -695,11 +756,12 @@ def bed_detail_page(bed_id: int):
         hx_trigger="click",
         hx_on__after_request="document.getElementById('bed-dialog').showModal()",
     )
+    garden_date = on_date if on_date and _parse_date_or_none(on_date) else date.today().isoformat()
     garden_date_picker = fast.Label(
         "Garden as of:",
         fast.Input(
             type="date", id="garden-date", name="planted_date", form="batch-plant-form",
-            value=date.today().isoformat(),
+            value=garden_date,
         ),
     )
     return layout(

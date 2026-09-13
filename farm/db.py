@@ -4,6 +4,24 @@ from sqlalchemy import text
 
 from farm.helpers import compute_window
 
+
+def _migrate_harvest_planting_ids(db_connection):
+    """One-off: harvests used to hold a single required planting_id. Basket-then-weigh harvesting
+    means one weighing can cover several plants at once, so that's now a many-to-many via
+    harvest_plantings instead. Backfills any existing planting_id into the join table, then drops
+    the column (SQLite 3.35+ supports ALTER TABLE ... DROP COLUMN directly). Idempotent: once the
+    column's gone this is a no-op on every later startup, same as add_column_if_not_exists.
+    """
+    existing_columns = {row[1] for row in db_connection.execute(text("PRAGMA table_info(harvests)")).all()}
+    if "planting_id" not in existing_columns:
+        return
+    db_connection.execute(text(
+        "INSERT OR IGNORE INTO harvest_plantings (harvest_id, planting_id) "
+        "SELECT id, planting_id FROM harvests WHERE planting_id IS NOT NULL"
+    ))
+    db_connection.execute(text("ALTER TABLE harvests DROP COLUMN planting_id"))
+
+
 SCHEMA_STATEMENTS = [
     """
     CREATE TABLE IF NOT EXISTS seed_varieties (
@@ -151,13 +169,20 @@ SCHEMA_STATEMENTS = [
     """
     CREATE TABLE IF NOT EXISTS harvests (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        planting_id INTEGER NOT NULL,
         harvest_date TEXT NOT NULL,
         weight_lb REAL NOT NULL,
         notes TEXT,
         created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
     )
     """,
+    """
+    CREATE TABLE IF NOT EXISTS harvest_plantings (
+        harvest_id INTEGER NOT NULL,
+        planting_id INTEGER NOT NULL,
+        PRIMARY KEY (harvest_id, planting_id)
+    )
+    """,
+    _migrate_harvest_planting_ids,
     """
     CREATE TABLE IF NOT EXISTS shade_sources (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -202,7 +227,7 @@ _PLANTING_COLUMNS = (
     "x_in, y_in, seed_lot_id, transplant_lot_id, source_type, soil_temp_f, shade_warning, created_at"
 )
 
-_HARVEST_COLUMNS = "id, planting_id, harvest_date, weight_lb, notes, created_at"
+_HARVEST_COLUMNS = "h.id, h.harvest_date, h.weight_lb, h.notes, h.created_at"
 
 _SEED_LOT_COLUMNS = "id, variety_id, quantity_on_hand, acquired_date, seed_source, notes, created_at"
 
@@ -796,33 +821,82 @@ class FarmDatabaseMixin:
             if row is not None:
                 self._regenerate_farm_events(db_connection, row["variety_id"], row["planted_date"])
 
-    def add_harvest(self, planting_id: int, harvest_date: str, weight_lb: float, notes: str = None):
-        "Returns the new harvest's id. One planting can be harvested repeatedly -- this appends, never replaces."
+    def add_harvest(self, planting_ids, harvest_date: str, weight_lb: float, notes: str = None):
+        """Returns the new harvest's id. planting_ids is every planting this weighing covers --
+        basket-then-weigh harvesting means one harvest can span several plants at once (see
+        harvest_plantings). A planting can appear across repeated harvests over a season; this
+        always appends a new row, never replaces one."""
         with self.engine.begin() as db_connection:
             result = db_connection.execute(
-                text(
-                    "INSERT INTO harvests (planting_id, harvest_date, weight_lb, notes) "
-                    "VALUES (:planting_id, :harvest_date, :weight_lb, :notes)"
-                ),
-                {"planting_id": planting_id, "harvest_date": harvest_date, "weight_lb": weight_lb, "notes": notes or None},
+                text("INSERT INTO harvests (harvest_date, weight_lb, notes) VALUES (:harvest_date, :weight_lb, :notes)"),
+                {"harvest_date": harvest_date, "weight_lb": weight_lb, "notes": notes or None},
             )
-            return result.lastrowid
+            harvest_id = result.lastrowid
+            db_connection.execute(
+                text("INSERT INTO harvest_plantings (harvest_id, planting_id) VALUES (:harvest_id, :planting_id)"),
+                [{"harvest_id": harvest_id, "planting_id": planting_id} for planting_id in planting_ids],
+            )
+            return harvest_id
 
     def get_harvest(self, harvest_id: int):
         with self.engine.connect() as db_connection:
             return db_connection.execute(
-                text(f"SELECT {_HARVEST_COLUMNS} FROM harvests WHERE id = :id"), {"id": harvest_id}
+                text(f"SELECT {_HARVEST_COLUMNS} FROM harvests h WHERE h.id = :id"), {"id": harvest_id}
             ).mappings().first()
 
     def list_harvests_for_planting(self, planting_id: int):
         with self.engine.connect() as db_connection:
             return db_connection.execute(
                 text(
-                    f"SELECT {_HARVEST_COLUMNS} FROM harvests WHERE planting_id = :planting_id "
-                    "ORDER BY harvest_date DESC, id DESC"
+                    f"SELECT {_HARVEST_COLUMNS} FROM harvests h "
+                    "JOIN harvest_plantings hp ON hp.harvest_id = h.id "
+                    "WHERE hp.planting_id = :planting_id "
+                    "ORDER BY h.harvest_date DESC, h.id DESC"
                 ),
                 {"planting_id": planting_id},
             ).mappings().all()
+
+    def list_harvest_shares_for_planting(self, planting_id: int):
+        """Every harvest touching this planting, alongside plantings_in_harvest -- how many
+        plantings that harvest is tagged against in total. Callers divide weight_lb by
+        plantings_in_harvest to get this planting's even-split share of a basket-then-weigh harvest."""
+        with self.engine.connect() as db_connection:
+            return db_connection.execute(
+                text(
+                    f"SELECT {_HARVEST_COLUMNS}, "
+                    "(SELECT COUNT(*) FROM harvest_plantings hp2 WHERE hp2.harvest_id = h.id) AS plantings_in_harvest "
+                    "FROM harvests h "
+                    "JOIN harvest_plantings hp ON hp.harvest_id = h.id "
+                    "WHERE hp.planting_id = :planting_id "
+                    "ORDER BY h.harvest_date DESC, h.id DESC"
+                ),
+                {"planting_id": planting_id},
+            ).mappings().all()
+
+    def list_harvests_for_group(self, variety_id: int, planted_date: str):
+        "Every harvest touching any planting in this (variety_id, planted_date) group -- the same group list_plantings_in_group returns."
+        with self.engine.connect() as db_connection:
+            return db_connection.execute(
+                text(
+                    f"SELECT DISTINCT {_HARVEST_COLUMNS} FROM harvests h "
+                    "JOIN harvest_plantings hp ON hp.harvest_id = h.id "
+                    "JOIN plantings p ON p.id = hp.planting_id "
+                    "WHERE p.variety_id = :variety_id AND p.planted_date = :planted_date "
+                    "ORDER BY h.harvest_date DESC, h.id DESC"
+                ),
+                {"variety_id": variety_id, "planted_date": planted_date},
+            ).mappings().all()
+
+    def get_harvest_planting_ids(self, harvest_id: int):
+        "Every planting this harvest is tagged against, for display and for edit/delete redirect targets."
+        with self.engine.connect() as db_connection:
+            return [
+                row["planting_id"]
+                for row in db_connection.execute(
+                    text("SELECT planting_id FROM harvest_plantings WHERE harvest_id = :harvest_id ORDER BY planting_id"),
+                    {"harvest_id": harvest_id},
+                ).mappings().all()
+            ]
 
     def update_harvest(self, harvest_id: int, harvest_date: str, weight_lb: float, notes: str = None):
         with self.engine.begin() as db_connection:
@@ -836,6 +910,7 @@ class FarmDatabaseMixin:
 
     def delete_harvest(self, harvest_id: int):
         with self.engine.begin() as db_connection:
+            db_connection.execute(text("DELETE FROM harvest_plantings WHERE harvest_id = :id"), {"id": harvest_id})
             db_connection.execute(text("DELETE FROM harvests WHERE id = :id"), {"id": harvest_id})
 
     def _insert_farm_event_row(

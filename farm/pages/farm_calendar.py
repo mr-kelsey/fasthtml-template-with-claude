@@ -5,6 +5,7 @@ from fasthtml import common as fast
 
 from farm.layout import layout
 from farm.helpers import parse_optional_int, parse_required_float
+from farm.pages.plantings import _harvest_batch_form, _validate_planting_ids
 from calendar_shared import month_grid, events_by_date, month_nav, day_square, calendar_grid
 import db
 
@@ -94,7 +95,9 @@ def _farm_event_row(event, year, month):
     label = f"{event['title']} ({event['event_type']})"
     if event["linked_planting_id"] is not None:
         detail_href = (
-            f"/beds/{event['planting_bed_id']}" if event["planting_bed_id"] else f"/plantings/{event['linked_planting_id']}/edit"
+            f"/beds/{event['planting_bed_id']}?on_date={event['start_date']}"
+            if event["planting_bed_id"]
+            else f"/plantings/{event['linked_planting_id']}/edit"
         )
         parts = [label, " — auto-generated — ", fast.A("View source", href=detail_href)]
         if event["event_type"] in RECORDABLE_EVENT_TYPES:
@@ -210,24 +213,13 @@ def _germination_record_row(planting, event_id, year, month):
     )
 
 
-def _harvest_record_row(harvest):
-    label = f"{harvest['harvest_date']}: {harvest['weight_lb']} lb"
+def _group_harvest_record_row(harvest):
+    "Basket-then-weigh harvesting means one harvest can span several plantings -- list which ones."
+    planting_ids = db.get_harvest_planting_ids(harvest["id"])
+    label = f"{harvest['harvest_date']}: {harvest['weight_lb']} lb across " + ", ".join(f"#{i}" for i in planting_ids)
     if harvest["notes"]:
         label += f" — {harvest['notes']}"
     return fast.Li(label)
-
-
-def _harvest_record_form(event_id, year, month):
-    return fast.Form(
-        fast.Input(name="harvest_date", type="date", required=True),
-        fast.Input(name="weight_lb", type="number", step="0.01", placeholder="Weight (lb)", required=True),
-        fast.Textarea("", name="notes", placeholder="Notes (optional)"),
-        fast.Input(type="hidden", name="redirect_year", value=str(year)),
-        fast.Input(type="hidden", name="redirect_month", value=str(month)),
-        fast.Button("Log Harvest", type="submit"),
-        method="post",
-        action=f"/farm-calendar/{event_id}/record/harvest",
-    )
 
 
 @router("/farm-calendar/{event_id}/record", methods=["get"])
@@ -251,11 +243,20 @@ def record_event_page(event_id: int, year: int = None, month: int = None):
             fast.Ul(*[_germination_record_row(p, event_id, year, month) for p in group]),
         )
     else:
-        harvests = db.list_harvests_for_planting(anchor["id"])
+        group = db.list_plantings_in_group(anchor["variety_id"], anchor["planted_date"])
+        harvests = db.list_harvests_for_group(anchor["variety_id"], anchor["planted_date"])
         content = (
             fast.H2(f"Record harvest: {variety_label}"),
-            fast.Ul(*[_harvest_record_row(h) for h in harvests]) if harvests else fast.P("No harvests logged yet."),
-            _harvest_record_form(event_id, year, month),
+            fast.Ul(*[_group_harvest_record_row(h) for h in harvests]) if harvests else fast.P("No harvests logged yet."),
+            _harvest_batch_form(
+                action=f"/farm-calendar/{event_id}/record/harvest",
+                plantings=group,
+                checked_ids=set(),
+                redirect_fields=[
+                    fast.Input(type="hidden", name="redirect_year", value=str(year)),
+                    fast.Input(type="hidden", name="redirect_month", value=str(month)),
+                ],
+            ),
         )
     return layout(
         "Record Farm Event",
@@ -287,7 +288,8 @@ def record_germination_route(
 
 @router("/farm-calendar/{event_id}/record/harvest", methods=["post"])
 def record_harvest_route(
-    event_id: int, harvest_date: str, weight_lb: str, notes: str = "", redirect_year: str = "", redirect_month: str = ""
+    event_id: int, harvest_date: str, weight_lb: str, planting_ids: list[str] = None,
+    notes: str = "", redirect_year: str = "", redirect_month: str = "",
 ):
     event = db.get_farm_event(event_id)
     if event is None or event["event_type"] != "harvest" or event["linked_planting_id"] is None:
@@ -298,7 +300,10 @@ def record_harvest_route(
     weight_lb_value, error = parse_required_float(weight_lb, "Weight")
     if error:
         return fast.Response(error, status_code=422)
-    db.add_harvest(event["linked_planting_id"], harvest_date, weight_lb_value, notes=notes.strip() or None)
+    ids = _validate_planting_ids(planting_ids or [])
+    if isinstance(ids, fast.Response):
+        return ids
+    db.add_harvest(ids, harvest_date, weight_lb_value, notes=notes.strip() or None)
     today = date.today()
     year = _parse_int_or(redirect_year, today.year)
     month = _parse_int_or(redirect_month, today.month)

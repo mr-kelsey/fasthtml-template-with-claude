@@ -69,13 +69,17 @@ class _CoreDatabase:
         return self._engine
 
     def init_db(self):
-        """Each SCHEMA_STATEMENTS entry is either a CREATE TABLE IF NOT EXISTS string, or a
-        (table, column, coldef) tuple for an additive column -- see add_column_if_not_exists.
+        """Each SCHEMA_STATEMENTS entry is a CREATE TABLE IF NOT EXISTS string, a
+        (table, column, coldef) tuple for an additive column (see add_column_if_not_exists), or a
+        (db_connection) -> None callable for a one-off data migration that's more than a single
+        additive column (e.g. backfilling a column into a new join table, then dropping it).
         """
         with self.engine.begin() as db_connection:
             for statement in self.SCHEMA_STATEMENTS:
                 if isinstance(statement, tuple):
                     add_column_if_not_exists(db_connection, *statement)
+                elif callable(statement):
+                    statement(db_connection)
                 else:
                     db_connection.execute(text(statement))
 
