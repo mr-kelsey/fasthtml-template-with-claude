@@ -14,6 +14,7 @@ from farm.helpers import (
     compute_window,
     validate_quantity_germinated,
     validate_non_negative,
+    variety_photo_img,
 )
 import db
 
@@ -352,9 +353,11 @@ def edit_planting_page(planting_id: int):
     planting = db.get_planting(planting_id)
     if planting is None:
         return fast.Response("Planting not found.", status_code=404)
+    reference_photo = variety_photo_img(db.get_seed_variety(planting["variety_id"]), cls="variety-photo-reference")
     return layout(
         "Edit Planting",
         fast.H1("Edit Planting"),
+        *((reference_photo,) if reference_photo is not None else ()),
         _planting_form(
             action=f"/plantings/{planting_id}/edit",
             submit_label="Save Changes",

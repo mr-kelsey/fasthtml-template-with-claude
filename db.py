@@ -59,6 +59,7 @@ class _CoreDatabase:
     def __init__(self, env_file=".env"):
         env = dotenv_values(env_file)
         self.DB_PATH = env.get("DB_PATH", "data/app.db")
+        self.UPLOADS_DIR = env.get("UPLOADS_DIR", "data/uploads")
         self._engine = None
 
     @property

@@ -1,7 +1,13 @@
+import base64
 import json
 from datetime import date
+from pathlib import Path
 
 import db
+
+_PNG_BYTES = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+)
 
 
 def test_seed_varieties_page_returns_200(client):
@@ -181,6 +187,106 @@ def test_delete_seed_variety_removes_it(client):
     assert db.list_seed_varieties() == []
 
 
+def test_add_seed_variety_with_photo_persists_photo_path(client):
+    client.post(
+        "/seed-varieties",
+        data={"common_name": "Tomato", "name": "Cherokee Purple", "plant_family": "Solanaceae"},
+        files={"photo": ("seedling.png", _PNG_BYTES, "image/png")},
+    )
+    variety = db.list_seed_varieties()[0]
+    assert variety["photo_path"] is not None
+    response = client.get(f"/uploads/{variety['photo_path']}")
+    assert response.status_code == 200
+
+
+def test_add_seed_variety_rejects_disallowed_photo_extension(client):
+    response = client.post(
+        "/seed-varieties",
+        data={"common_name": "Tomato", "name": "Cherokee Purple", "plant_family": "Solanaceae"},
+        files={"photo": ("seedling.txt", b"not a photo", "text/plain")},
+    )
+    assert response.status_code == 422
+    assert db.list_seed_varieties() == []
+
+
+def test_add_seed_variety_rejects_oversized_photo(client):
+    oversized = b"0" * (5 * 1024 * 1024 + 1)
+    response = client.post(
+        "/seed-varieties",
+        data={"common_name": "Tomato", "name": "Cherokee Purple", "plant_family": "Solanaceae"},
+        files={"photo": ("seedling.png", oversized, "image/png")},
+    )
+    assert response.status_code == 422
+    assert db.list_seed_varieties() == []
+
+
+def test_edit_seed_variety_replacing_photo_deletes_old_file(client):
+    client.post(
+        "/seed-varieties",
+        data={"common_name": "Tomato", "name": "Cherokee Purple", "plant_family": "Solanaceae"},
+        files={"photo": ("first.png", _PNG_BYTES, "image/png")},
+    )
+    variety_id = db.list_seed_varieties()[0]["id"]
+    old_path = db.get_seed_variety(variety_id)["photo_path"]
+    old_file = Path(db.UPLOADS_DIR) / old_path
+    assert old_file.exists()
+    client.post(
+        f"/seed-varieties/{variety_id}/edit",
+        data={"common_name": "Tomato", "name": "Cherokee Purple", "plant_family": "Solanaceae"},
+        files={"photo": ("second.png", _PNG_BYTES, "image/png")},
+    )
+    new_path = db.get_seed_variety(variety_id)["photo_path"]
+    assert new_path != old_path
+    assert not old_file.exists()
+    assert (Path(db.UPLOADS_DIR) / new_path).exists()
+
+
+def test_edit_seed_variety_without_a_new_photo_keeps_the_existing_one(client):
+    client.post(
+        "/seed-varieties",
+        data={"common_name": "Tomato", "name": "Cherokee Purple", "plant_family": "Solanaceae"},
+        files={"photo": ("first.png", _PNG_BYTES, "image/png")},
+    )
+    variety_id = db.list_seed_varieties()[0]["id"]
+    old_path = db.get_seed_variety(variety_id)["photo_path"]
+    client.post(
+        f"/seed-varieties/{variety_id}/edit",
+        data={"common_name": "Tomato", "name": "Updated", "plant_family": "Solanaceae"},
+    )
+    assert db.get_seed_variety(variety_id)["photo_path"] == old_path
+
+
+def test_edit_seed_variety_remove_photo_clears_it(client):
+    client.post(
+        "/seed-varieties",
+        data={"common_name": "Tomato", "name": "Cherokee Purple", "plant_family": "Solanaceae"},
+        files={"photo": ("first.png", _PNG_BYTES, "image/png")},
+    )
+    variety_id = db.list_seed_varieties()[0]["id"]
+    old_path = db.get_seed_variety(variety_id)["photo_path"]
+    client.post(
+        f"/seed-varieties/{variety_id}/edit",
+        data={
+            "common_name": "Tomato", "name": "Cherokee Purple", "plant_family": "Solanaceae",
+            "remove_photo": "on",
+        },
+    )
+    assert db.get_seed_variety(variety_id)["photo_path"] is None
+    assert not (Path(db.UPLOADS_DIR) / old_path).exists()
+
+
+def test_delete_seed_variety_removes_its_photo_file(client):
+    client.post(
+        "/seed-varieties",
+        data={"common_name": "Tomato", "name": "To delete", "plant_family": "Solanaceae"},
+        files={"photo": ("first.png", _PNG_BYTES, "image/png")},
+    )
+    variety_id = db.list_seed_varieties()[0]["id"]
+    photo_path = db.get_seed_variety(variety_id)["photo_path"]
+    client.post(f"/seed-varieties/{variety_id}/delete")
+    assert not (Path(db.UPLOADS_DIR) / photo_path).exists()
+
+
 def test_duplicate_seed_variety_page_returns_200(client):
     client.post(
         "/seed-varieties",
@@ -229,6 +335,59 @@ def test_submitting_duplicated_variety_creates_a_second_row(client):
         "/seed-varieties", data={"common_name": "Tomato", "name": "Cherokee Purple", "plant_family": "Solanaceae"}
     )
     assert len(db.list_seed_varieties()) == 2
+
+
+def test_duplicate_seed_variety_page_carries_photo_forward_as_hidden_field(client):
+    client.post(
+        "/seed-varieties",
+        data={"common_name": "Tomato", "name": "Cherokee Purple", "plant_family": "Solanaceae"},
+        files={"photo": ("first.png", _PNG_BYTES, "image/png")},
+    )
+    variety_id = db.list_seed_varieties()[0]["id"]
+    photo_path = db.get_seed_variety(variety_id)["photo_path"]
+    response = client.get(f"/seed-varieties/{variety_id}/duplicate")
+    assert f'value="{photo_path}"' in response.text
+
+
+def test_duplicating_a_variety_with_a_photo_copies_it_to_a_new_file(client):
+    client.post(
+        "/seed-varieties",
+        data={"common_name": "Tomato", "name": "Cherokee Purple", "plant_family": "Solanaceae"},
+        files={"photo": ("first.png", _PNG_BYTES, "image/png")},
+    )
+    source_id = db.list_seed_varieties()[0]["id"]
+    source_photo_path = db.get_seed_variety(source_id)["photo_path"]
+    client.post(
+        "/seed-varieties",
+        data={
+            "common_name": "Tomato", "name": "Brandywine", "plant_family": "Solanaceae",
+            "duplicate_photo_path": source_photo_path,
+        },
+    )
+    duplicate = next(v for v in db.list_seed_varieties() if v["id"] != source_id)
+    assert duplicate["photo_path"] is not None
+    assert duplicate["photo_path"] != source_photo_path
+    assert (Path(db.UPLOADS_DIR) / duplicate["photo_path"]).exists()
+
+
+def test_duplicating_a_variety_with_an_uploaded_photo_overrides_the_carried_over_one(client):
+    client.post(
+        "/seed-varieties",
+        data={"common_name": "Tomato", "name": "Cherokee Purple", "plant_family": "Solanaceae"},
+        files={"photo": ("first.png", _PNG_BYTES, "image/png")},
+    )
+    source_id = db.list_seed_varieties()[0]["id"]
+    source_photo_path = db.get_seed_variety(source_id)["photo_path"]
+    client.post(
+        "/seed-varieties",
+        data={
+            "common_name": "Tomato", "name": "Brandywine", "plant_family": "Solanaceae",
+            "duplicate_photo_path": source_photo_path,
+        },
+        files={"photo": ("second.png", _PNG_BYTES, "image/png")},
+    )
+    duplicate = next(v for v in db.list_seed_varieties() if v["id"] != source_id)
+    assert duplicate["photo_path"] != source_photo_path
 
 
 def test_seed_varieties_page_shows_no_companion_rules_yet_when_none_exist(client):
@@ -319,10 +478,14 @@ def test_delete_companion_rule_removes_it(client):
     assert db.list_companion_rules() == []
 
 
-def _create_variety(client, common_name="Tomato", variety_name="Cherokee Purple", plant_family="Solanaceae", **variety_fields):
+def _create_variety(
+    client, common_name="Tomato", variety_name="Cherokee Purple", plant_family="Solanaceae", files=None,
+    **variety_fields,
+):
     client.post(
         "/seed-varieties",
         data={"common_name": common_name, "name": variety_name, "plant_family": plant_family, **variety_fields},
+        files=files,
     )
     return db.list_seed_varieties()[0]["id"]
 
@@ -685,6 +848,24 @@ def test_edit_planting_page_shows_no_yield_when_no_harvests_logged(client):
     planting_id = db.list_plantings()[0]["id"]
     response = client.get(f"/plantings/{planting_id}/edit")
     assert "No harvests logged yet." in response.text
+
+
+def test_edit_planting_page_shows_variety_reference_photo(client):
+    variety_id = _create_variety(client, files={"photo": ("seedling.png", _PNG_BYTES, "image/png")})
+    client.post("/plantings", data={"variety_id": str(variety_id), "planted_date": "2026-05-01"})
+    planting_id = db.list_plantings()[0]["id"]
+    response = client.get(f"/plantings/{planting_id}/edit")
+    photo_path = db.get_seed_variety(variety_id)["photo_path"]
+    assert photo_path in response.text
+    assert "variety-photo-reference" in response.text
+
+
+def test_edit_planting_page_renders_without_a_variety_photo(client):
+    variety_id = _create_variety(client)
+    client.post("/plantings", data={"variety_id": str(variety_id), "planted_date": "2026-05-01"})
+    planting_id = db.list_plantings()[0]["id"]
+    response = client.get(f"/plantings/{planting_id}/edit")
+    assert response.status_code == 200
 
 
 def test_post_planting_harvest_route_adds_row(client):
@@ -1697,6 +1878,26 @@ def test_record_germination_page_lists_every_planting_in_group(client):
     event = db.list_farm_events_in_range("2000-01-01", "2100-01-01")[0]
     response = client.get(f"/farm-calendar/{event['id']}/record")
     assert "(sown: 3)" in response.text and "(sown: 7)" in response.text
+
+
+def test_record_germination_page_shows_variety_reference_photo(client):
+    variety_id = _create_variety(
+        client, germination_days_min="5", germination_days_max="10",
+        files={"photo": ("seedling.png", _PNG_BYTES, "image/png")},
+    )
+    client.post("/plantings", data={"variety_id": str(variety_id), "planted_date": "2026-05-01"})
+    event = db.list_farm_events_in_range("2000-01-01", "2100-01-01")[0]
+    response = client.get(f"/farm-calendar/{event['id']}/record")
+    photo_path = db.get_seed_variety(variety_id)["photo_path"]
+    assert photo_path in response.text
+
+
+def test_record_germination_page_renders_without_a_variety_photo(client):
+    variety_id = _create_variety(client, germination_days_min="5", germination_days_max="10")
+    client.post("/plantings", data={"variety_id": str(variety_id), "planted_date": "2026-05-01"})
+    event = db.list_farm_events_in_range("2000-01-01", "2100-01-01")[0]
+    response = client.get(f"/farm-calendar/{event['id']}/record")
+    assert response.status_code == 200
 
 
 def test_post_record_germination_updates_target_planting_quantity(client):

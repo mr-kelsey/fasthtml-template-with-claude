@@ -2,6 +2,8 @@
 
 from datetime import date, timedelta
 
+from fasthtml import common as fast
+
 AGRONOMIC_FIELD_LABELS = {
     "germination_days_min": "Germination days (min)",
     "germination_days_max": "Germination days (max)",
@@ -232,3 +234,12 @@ def format_day_range(days_min: int, days_max: int):
     if days_max is None:
         return f"{days_min}+"
     return f"{days_min}-{days_max}"
+
+
+def variety_photo_img(variety, cls="variety-photo-thumb"):
+    "Img for the variety's reference photo (served from db.UPLOADS_DIR via /uploads/), or None if it has none."
+    if variety is None or not variety["photo_path"]:
+        return None
+    return fast.Img(
+        src=f"/uploads/{variety['photo_path']}", cls=cls, alt=f"{variety['common_name']} reference photo"
+    )

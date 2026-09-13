@@ -205,6 +205,7 @@ SCHEMA_STATEMENTS = [
     ("plantings", "shade_warning", "INTEGER"),
     ("beds", "grid_offset_x_in", "REAL NOT NULL DEFAULT 0"),
     ("beds", "grid_offset_y_in", "REAL NOT NULL DEFAULT 0"),
+    ("seed_varieties", "photo_path", "TEXT"),
 ]
 
 _AGRONOMIC_COLUMNS = (
@@ -219,7 +220,7 @@ _SOIL_FEEDING_COLUMNS = (
 
 _SEED_VARIETY_COLUMNS = (
     f"id, common_name, name, plant_family, genus, species, {_AGRONOMIC_COLUMNS}, {_SOIL_FEEDING_COLUMNS}, "
-    "color_hex, created_at"
+    "color_hex, photo_path, created_at"
 )
 
 _PLANTING_COLUMNS = (
@@ -295,9 +296,9 @@ _SEED_VARIETY_OPTIONAL_FIELDS = (
     "spacing_in", "sun_needs", "water_needs",
     "soil_type", "soil_ph_min", "soil_ph_max", "feeding_frequency_days",
     "growth_npk_n", "growth_npk_p", "growth_npk_k", "produce_npk_n", "produce_npk_p", "produce_npk_k",
-    "color_hex",
+    "color_hex", "photo_path",
 )
-_SEED_VARIETY_TEXT_FIELDS = ("genus", "species", "sun_needs", "water_needs", "soil_type", "color_hex")
+_SEED_VARIETY_TEXT_FIELDS = ("genus", "species", "sun_needs", "water_needs", "soil_type", "color_hex", "photo_path")
 
 
 def _seed_variety_fields(**kwargs):
@@ -334,13 +335,13 @@ class FarmDatabaseMixin:
                     "spacing_in, sun_needs, water_needs, "
                     "soil_type, soil_ph_min, soil_ph_max, feeding_frequency_days, "
                     "growth_npk_n, growth_npk_p, growth_npk_k, produce_npk_n, produce_npk_p, produce_npk_k, "
-                    "color_hex) "
+                    "color_hex, photo_path) "
                     "VALUES (:common_name, :name, :plant_family, :genus, :species, "
                     ":germination_days_min, :germination_days_max, :days_to_maturity_min, :days_to_maturity_max, "
                     ":spacing_in, :sun_needs, :water_needs, "
                     ":soil_type, :soil_ph_min, :soil_ph_max, :feeding_frequency_days, "
                     ":growth_npk_n, :growth_npk_p, :growth_npk_k, :produce_npk_n, :produce_npk_p, :produce_npk_k, "
-                    ":color_hex)"
+                    ":color_hex, :photo_path)"
                 ),
                 {"common_name": common_name, "name": name, "plant_family": plant_family, **fields},
             )
@@ -360,7 +361,7 @@ class FarmDatabaseMixin:
                     "feeding_frequency_days = :feeding_frequency_days, "
                     "growth_npk_n = :growth_npk_n, growth_npk_p = :growth_npk_p, growth_npk_k = :growth_npk_k, "
                     "produce_npk_n = :produce_npk_n, produce_npk_p = :produce_npk_p, produce_npk_k = :produce_npk_k, "
-                    "color_hex = :color_hex "
+                    "color_hex = :color_hex, photo_path = :photo_path "
                     "WHERE id = :id"
                 ),
                 {"id": variety_id, "common_name": common_name, "name": name, "plant_family": plant_family, **fields},

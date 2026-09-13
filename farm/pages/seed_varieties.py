@@ -1,3 +1,6 @@
+from pathlib import Path
+from uuid import uuid4
+
 from fasthtml import common as fast
 
 from farm.layout import layout
@@ -9,12 +12,59 @@ from farm.helpers import (
     format_day_range,
     format_npk,
     next_palette_color,
+    variety_photo_img,
     SUN_NEEDS_OPTIONS,
     RELATION_OPTIONS,
 )
 import db
 
 router = fast.APIRouter()
+
+PHOTO_ALLOWED_EXTENSIONS = {"jpg", "jpeg", "png", "webp", "gif"}
+MAX_PHOTO_BYTES = 5 * 1024 * 1024
+VARIETY_PHOTO_SUBDIR = "varieties"
+
+
+def _variety_photos_dir():
+    photos_dir = Path(db.UPLOADS_DIR) / VARIETY_PHOTO_SUBDIR
+    photos_dir.mkdir(parents=True, exist_ok=True)
+    return photos_dir
+
+
+def _save_uploaded_photo(upload_file):
+    "Returns (photo_path, error). photo_path is None (with no error) when no file was chosen."
+    if upload_file is None or not upload_file.filename:
+        return None, None
+    extension = Path(upload_file.filename).suffix.lower().lstrip(".")
+    if extension not in PHOTO_ALLOWED_EXTENSIONS:
+        return None, f"Photo must be one of: {', '.join(sorted(PHOTO_ALLOWED_EXTENSIONS))}."
+    content = upload_file.file.read()
+    if not content:
+        return None, None
+    if len(content) > MAX_PHOTO_BYTES:
+        return None, "Photo must be 5MB or smaller."
+    _variety_photos_dir()
+    relative_path = f"{VARIETY_PHOTO_SUBDIR}/{uuid4().hex}.{extension}"
+    (Path(db.UPLOADS_DIR) / relative_path).write_bytes(content)
+    return relative_path, None
+
+
+def _copy_photo(source_relative_path):
+    "Physically copies an existing variety photo to a new file, so the new row owns an independent copy."
+    source = Path(db.UPLOADS_DIR) / source_relative_path
+    if not source.exists():
+        return None
+    extension = source.suffix.lstrip(".")
+    _variety_photos_dir()
+    relative_path = f"{VARIETY_PHOTO_SUBDIR}/{uuid4().hex}.{extension}"
+    (Path(db.UPLOADS_DIR) / relative_path).write_bytes(source.read_bytes())
+    return relative_path
+
+
+def _delete_photo_file(relative_path):
+    if not relative_path:
+        return
+    (Path(db.UPLOADS_DIR) / relative_path).unlink(missing_ok=True)
 
 
 def _optional_value(variety, field):
@@ -93,7 +143,30 @@ def _agronomic_form_fields(variety=None):
     )
 
 
-def _variety_form(action, submit_label, variety=None, default_color_hex=None):
+def _photo_field(variety, is_edit):
+    """Renders the photo upload input, plus whatever context applies: a thumbnail and "remove photo"
+    checkbox when editing an existing photo, or a thumbnail and hidden carry-forward field when
+    duplicating (photo_path is copied server-side on submit -- see _copy_photo)."""
+    upload_input = fast.Input(name="photo", type="file", accept="image/jpeg,image/png,image/webp,image/gif")
+    current_photo = variety_photo_img(variety) if variety else None
+    if current_photo is None:
+        return (fast.Label("Reference photo (optional, for telling seedlings apart from weeds)", upload_input),)
+    if is_edit:
+        return (
+            fast.Div(
+                current_photo,
+                fast.Label(fast.Input(type="checkbox", name="remove_photo"), " Remove photo"),
+            ),
+            fast.Label("Replace photo", upload_input),
+        )
+    return (
+        fast.Div(current_photo, fast.P("Photo will be carried over to the new variety unless you pick a new one.")),
+        fast.Input(type="hidden", name="duplicate_photo_path", value=variety["photo_path"]),
+        fast.Label("Replace photo", upload_input),
+    )
+
+
+def _variety_form(action, submit_label, variety=None, default_color_hex=None, is_edit=False):
     color_value = (variety["color_hex"] if variety else None) or default_color_hex or "#000000"
     return fast.Form(
         fast.Input(
@@ -115,24 +188,30 @@ def _variety_form(action, submit_label, variety=None, default_color_hex=None):
         fast.Input(name="genus", placeholder="Genus (optional)", value=_optional_value(variety, "genus")),
         fast.Input(name="species", placeholder="Species (optional)", value=_optional_value(variety, "species")),
         fast.Label("Color (used for staged/planted dots on the bed detail map)", fast.Input(name="color_hex", type="color", value=color_value)),
+        *_photo_field(variety, is_edit),
         *_agronomic_form_fields(variety),
         fast.Button(submit_label, type="submit"),
         method="post",
         action=action,
+        enctype="multipart/form-data",
     )
 
 
 def _variety_row(variety):
-    return fast.Tr(
-        fast.Td(
-            fast.Div(
-                fast.Span(cls="variety-swatch", style=f"background-color:{variety['color_hex'] or '#888888'}"),
-                variety["common_name"],
-                cls="variety-identity-name",
-            ),
-            fast.Div(variety["name"], cls="variety-identity-subtitle"),
-            cls="sticky-col-left",
+    identity_children = []
+    photo = variety_photo_img(variety)
+    if photo is not None:
+        identity_children.append(photo)
+    identity_children += [
+        fast.Div(
+            fast.Span(cls="variety-swatch", style=f"background-color:{variety['color_hex'] or '#888888'}"),
+            variety["common_name"],
+            cls="variety-identity-name",
         ),
+        fast.Div(variety["name"], cls="variety-identity-subtitle"),
+    ]
+    return fast.Tr(
+        fast.Td(*identity_children, cls="sticky-col-left"),
         fast.Td(variety["plant_family"]),
         fast.Td(variety["genus"] or ""),
         fast.Td(variety["species"] or ""),
@@ -302,6 +381,8 @@ def add_seed_variety_route(
     growth_npk: str = "",
     produce_npk: str = "",
     color_hex: str = "",
+    photo: fast.UploadFile = None,
+    duplicate_photo_path: str = "",
 ):
     validated = _validate_required_fields(common_name, name, plant_family)
     if isinstance(validated, fast.Response):
@@ -318,6 +399,11 @@ def add_seed_variety_route(
     if isinstance(validated_soil, fast.Response):
         return validated_soil
     soil_feeding_fields, sun_needs_value = validated_soil
+    photo_path, error = _save_uploaded_photo(photo)
+    if error:
+        return fast.Response(error, status_code=422)
+    if photo_path is None and duplicate_photo_path.strip():
+        photo_path = _copy_photo(duplicate_photo_path.strip())
     db.add_seed_variety(
         common_name,
         name,
@@ -327,6 +413,7 @@ def add_seed_variety_route(
         sun_needs=sun_needs_value,
         water_needs=water_needs.strip() or None,
         color_hex=color_hex.strip() or None,
+        photo_path=photo_path,
         **fields,
         **soil_feeding_fields,
     )
@@ -341,7 +428,9 @@ def edit_seed_variety_page(variety_id: int):
     return layout(
         "Edit Seed Variety",
         fast.H1("Edit Seed Variety"),
-        _variety_form(action=f"/seed-varieties/{variety_id}/edit", submit_label="Save Changes", variety=variety),
+        _variety_form(
+            action=f"/seed-varieties/{variety_id}/edit", submit_label="Save Changes", variety=variety, is_edit=True
+        ),
     )
 
 
@@ -381,6 +470,8 @@ def update_seed_variety_route(
     growth_npk: str = "",
     produce_npk: str = "",
     color_hex: str = "",
+    photo: fast.UploadFile = None,
+    remove_photo: str = "",
 ):
     validated = _validate_required_fields(common_name, name, plant_family)
     if isinstance(validated, fast.Response):
@@ -397,6 +488,19 @@ def update_seed_variety_route(
     if isinstance(validated_soil, fast.Response):
         return validated_soil
     soil_feeding_fields, sun_needs_value = validated_soil
+    existing = db.get_seed_variety(variety_id)
+    existing_photo_path = existing["photo_path"] if existing else None
+    new_photo_path, error = _save_uploaded_photo(photo)
+    if error:
+        return fast.Response(error, status_code=422)
+    if new_photo_path is not None:
+        _delete_photo_file(existing_photo_path)
+        photo_path = new_photo_path
+    elif remove_photo.strip():
+        _delete_photo_file(existing_photo_path)
+        photo_path = None
+    else:
+        photo_path = existing_photo_path
     db.update_seed_variety(
         variety_id,
         common_name,
@@ -407,6 +511,7 @@ def update_seed_variety_route(
         sun_needs=sun_needs_value,
         water_needs=water_needs.strip() or None,
         color_hex=color_hex.strip() or None,
+        photo_path=photo_path,
         **fields,
         **soil_feeding_fields,
     )
@@ -415,7 +520,10 @@ def update_seed_variety_route(
 
 @router("/seed-varieties/{variety_id}/delete", methods=["post"])
 def delete_seed_variety_route(variety_id: int):
+    variety = db.get_seed_variety(variety_id)
     db.delete_seed_variety(variety_id)
+    if variety is not None:
+        _delete_photo_file(variety["photo_path"])
     return fast.Redirect("/seed-varieties")
 
 

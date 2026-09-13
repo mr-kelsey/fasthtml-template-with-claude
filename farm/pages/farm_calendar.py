@@ -4,7 +4,13 @@ from urllib.parse import urlencode
 from fasthtml import common as fast
 
 from farm.layout import layout
-from farm.helpers import parse_optional_int, parse_required_float, validate_quantity_germinated, validate_non_negative
+from farm.helpers import (
+    parse_optional_int,
+    parse_required_float,
+    validate_quantity_germinated,
+    validate_non_negative,
+    variety_photo_img,
+)
 from farm.pages.plantings import _harvest_batch_form, _validate_planting_ids
 from calendar_shared import month_grid, events_by_date, month_nav, day_square, calendar_grid
 import db
@@ -238,8 +244,10 @@ def record_event_page(event_id: int, year: int = None, month: int = None):
     variety_label = f"{variety['common_name']} - {variety['name']}" if variety else "Unknown variety"
     if event["event_type"] == "germination-check":
         group = db.list_plantings_in_group(anchor["variety_id"], anchor["planted_date"])
+        reference_photo = variety_photo_img(variety, cls="variety-photo-reference") if variety else None
         content = (
             fast.H2(f"Record germination: {variety_label}"),
+            *((reference_photo,) if reference_photo is not None else ()),
             fast.Ul(*[_germination_record_row(p, event_id, year, month) for p in group]),
         )
     else:
