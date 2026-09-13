@@ -199,6 +199,20 @@ def validate_relation(value: str):
     return value, None
 
 
+def validate_non_negative(value, field_label):
+    "Returns an error message, or None. A None value (unset) is always valid -- callers gate required-ness."
+    if value is not None and value < 0:
+        return f"{field_label} cannot be negative."
+    return None
+
+
+def validate_quantity_germinated(quantity_germinated, quantity_sown):
+    "Returns an error message, or None. Skipped when quantity_sown is unknown -- nothing to bound against."
+    if quantity_germinated is not None and quantity_sown is not None and quantity_germinated > quantity_sown:
+        return "Quantity germinated cannot exceed quantity sown."
+    return None
+
+
 def compute_window(planted_date: str, days_min: int, days_max: int):
     "The (start, end) date range a milestone is expected to land in, or None when the days aren't known."
     if days_min is None or days_max is None:

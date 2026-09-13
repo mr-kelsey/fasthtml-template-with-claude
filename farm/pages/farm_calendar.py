@@ -4,7 +4,7 @@ from urllib.parse import urlencode
 from fasthtml import common as fast
 
 from farm.layout import layout
-from farm.helpers import parse_optional_int, parse_required_float
+from farm.helpers import parse_optional_int, parse_required_float, validate_quantity_germinated, validate_non_negative
 from farm.pages.plantings import _harvest_batch_form, _validate_planting_ids
 from calendar_shared import month_grid, events_by_date, month_nav, day_square, calendar_grid
 import db
@@ -201,7 +201,7 @@ def _germination_record_row(planting, event_id, year, month):
         f"{label} (sown: {sown})",
         fast.Form(
             fast.Input(
-                name="quantity_germinated", type="number", placeholder="Quantity germinated",
+                name="quantity_germinated", type="number", min="0", placeholder="Quantity germinated",
                 value=_optional_value(planting, "quantity_germinated"),
             ),
             fast.Input(type="hidden", name="redirect_year", value=str(year)),
@@ -279,11 +279,17 @@ def record_germination_route(
     ok, value = parse_optional_int(quantity_germinated)
     if not ok:
         return fast.Response("Quantity germinated must be a number.", status_code=422)
+    error = validate_non_negative(value, "Quantity germinated")
+    if error:
+        return fast.Response(error, status_code=422)
+    error = validate_quantity_germinated(value, planting["quantity"])
+    if error:
+        return fast.Response(error, status_code=422)
     db.set_quantity_germinated(planting_id, value)
     today = date.today()
     year = _parse_int_or(redirect_year, today.year)
     month = _parse_int_or(redirect_month, today.month)
-    return fast.Redirect(_farm_calendar_url(year, month))
+    return fast.Redirect(_farm_calendar_url(year, month, base=f"/farm-calendar/{event_id}/record"))
 
 
 @router("/farm-calendar/{event_id}/record/harvest", methods=["post"])
@@ -300,6 +306,9 @@ def record_harvest_route(
     weight_lb_value, error = parse_required_float(weight_lb, "Weight")
     if error:
         return fast.Response(error, status_code=422)
+    error = validate_non_negative(weight_lb_value, "Weight")
+    if error:
+        return fast.Response(error, status_code=422)
     ids = _validate_planting_ids(planting_ids or [])
     if isinstance(ids, fast.Response):
         return ids
@@ -307,4 +316,4 @@ def record_harvest_route(
     today = date.today()
     year = _parse_int_or(redirect_year, today.year)
     month = _parse_int_or(redirect_month, today.month)
-    return fast.Redirect(_farm_calendar_url(year, month))
+    return fast.Redirect(_farm_calendar_url(year, month, base=f"/farm-calendar/{event_id}/record"))

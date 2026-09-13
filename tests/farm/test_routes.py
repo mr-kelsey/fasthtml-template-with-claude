@@ -649,6 +649,36 @@ def test_update_planting_rejects_quantity_culled_exceeding_germinated(client):
     assert response.status_code == 422
 
 
+def test_add_planting_rejects_quantity_germinated_exceeding_sown(client):
+    variety_id = _create_variety(client)
+    response = client.post(
+        "/plantings",
+        data={"variety_id": str(variety_id), "planted_date": "2026-05-01", "quantity": "3", "quantity_germinated": "5"},
+    )
+    assert response.status_code == 422
+
+
+def test_add_planting_rejects_negative_quantity_germinated(client):
+    variety_id = _create_variety(client)
+    response = client.post(
+        "/plantings",
+        data={"variety_id": str(variety_id), "planted_date": "2026-05-01", "quantity_germinated": "-1"},
+    )
+    assert response.status_code == 422
+
+
+def test_add_planting_rejects_negative_quantity_culled(client):
+    variety_id = _create_variety(client)
+    response = client.post(
+        "/plantings",
+        data={
+            "variety_id": str(variety_id), "planted_date": "2026-05-01",
+            "quantity_germinated": "5", "quantity_culled": "-1",
+        },
+    )
+    assert response.status_code == 422
+
+
 def test_edit_planting_page_shows_no_yield_when_no_harvests_logged(client):
     variety_id = _create_variety(client)
     client.post("/plantings", data={"variety_id": str(variety_id), "planted_date": "2026-05-01"})
@@ -666,6 +696,17 @@ def test_post_planting_harvest_route_adds_row(client):
         data={"harvest_date": "2026-08-01", "weight_lb": "3.5", "planting_ids": [str(planting_id)]},
     )
     assert len(db.list_harvests_for_planting(planting_id)) == 1
+
+
+def test_post_planting_harvest_route_rejects_negative_weight(client):
+    variety_id = _create_variety(client)
+    client.post("/plantings", data={"variety_id": str(variety_id), "planted_date": "2026-05-01"})
+    planting_id = db.list_plantings()[0]["id"]
+    response = client.post(
+        f"/plantings/{planting_id}/harvests",
+        data={"harvest_date": "2026-08-01", "weight_lb": "-3.5", "planting_ids": [str(planting_id)]},
+    )
+    assert response.status_code == 422
 
 
 def test_post_planting_harvest_route_rejects_no_plantings_selected(client):
@@ -1667,6 +1708,41 @@ def test_post_record_germination_updates_target_planting_quantity(client):
     assert db.get_planting(planting_id)["quantity_germinated"] == 8
 
 
+def test_post_record_germination_stays_on_record_page_instead_of_redirecting_to_calendar(client):
+    variety_id = _create_variety(client, germination_days_min="5", germination_days_max="10")
+    client.post("/plantings", data={"variety_id": str(variety_id), "planted_date": "2026-05-01"})
+    planting_id = db.list_plantings()[0]["id"]
+    event_id = db.list_farm_events_in_range("2000-01-01", "2100-01-01")[0]["id"]
+    response = client.post(
+        f"/farm-calendar/{event_id}/record/germination/{planting_id}",
+        data={"quantity_germinated": "8"},
+        follow_redirects=False,
+    )
+    assert response.headers["location"] == f"/farm-calendar/{event_id}/record?year={date.today().year}&month={date.today().month}"
+
+
+def test_post_record_germination_rejects_quantity_exceeding_sown(client):
+    variety_id = _create_variety(client, germination_days_min="5", germination_days_max="10")
+    client.post("/plantings", data={"variety_id": str(variety_id), "planted_date": "2026-05-01", "quantity": "3"})
+    planting_id = db.list_plantings()[0]["id"]
+    event_id = db.list_farm_events_in_range("2000-01-01", "2100-01-01")[0]["id"]
+    response = client.post(
+        f"/farm-calendar/{event_id}/record/germination/{planting_id}", data={"quantity_germinated": "5"}
+    )
+    assert response.status_code == 422
+
+
+def test_post_record_germination_rejects_negative_quantity(client):
+    variety_id = _create_variety(client, germination_days_min="5", germination_days_max="10")
+    client.post("/plantings", data={"variety_id": str(variety_id), "planted_date": "2026-05-01"})
+    planting_id = db.list_plantings()[0]["id"]
+    event_id = db.list_farm_events_in_range("2000-01-01", "2100-01-01")[0]["id"]
+    response = client.post(
+        f"/farm-calendar/{event_id}/record/germination/{planting_id}", data={"quantity_germinated": "-2"}
+    )
+    assert response.status_code == 422
+
+
 def test_post_record_germination_leaves_calendar_event_count_unchanged(client):
     variety_id = _create_variety(client, germination_days_min="5", germination_days_max="10")
     client.post("/plantings", data={"variety_id": str(variety_id), "planted_date": "2026-05-01"})
@@ -1709,6 +1785,31 @@ def test_post_record_harvest_route_appends_new_row_on_repeat_submit(client):
         data={"harvest_date": "2026-08-15", "weight_lb": "3.0", "planting_ids": [str(planting_id)]},
     )
     assert len(db.list_harvests_for_planting(planting_id)) == 2
+
+
+def test_post_record_harvest_stays_on_record_page_instead_of_redirecting_to_calendar(client):
+    variety_id = _create_variety(client, days_to_maturity_min="60", days_to_maturity_max="70")
+    client.post("/plantings", data={"variety_id": str(variety_id), "planted_date": "2026-05-01"})
+    planting_id = db.list_plantings()[0]["id"]
+    event_id = db.list_farm_events_in_range("2000-01-01", "2100-01-01")[0]["id"]
+    response = client.post(
+        f"/farm-calendar/{event_id}/record/harvest",
+        data={"harvest_date": "2026-08-01", "weight_lb": "2.0", "planting_ids": [str(planting_id)]},
+        follow_redirects=False,
+    )
+    assert response.headers["location"] == f"/farm-calendar/{event_id}/record?year={date.today().year}&month={date.today().month}"
+
+
+def test_post_record_harvest_rejects_negative_weight(client):
+    variety_id = _create_variety(client, days_to_maturity_min="60", days_to_maturity_max="70")
+    client.post("/plantings", data={"variety_id": str(variety_id), "planted_date": "2026-05-01"})
+    planting_id = db.list_plantings()[0]["id"]
+    event_id = db.list_farm_events_in_range("2000-01-01", "2100-01-01")[0]["id"]
+    response = client.post(
+        f"/farm-calendar/{event_id}/record/harvest",
+        data={"harvest_date": "2026-08-01", "weight_lb": "-2.0", "planting_ids": [str(planting_id)]},
+    )
+    assert response.status_code == 422
 
 
 def test_post_record_harvest_route_across_multiple_plantings_tags_both(client):

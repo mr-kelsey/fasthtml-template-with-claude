@@ -12,6 +12,8 @@ from farm.helpers import (
     parse_required_int,
     parse_required_float,
     compute_window,
+    validate_quantity_germinated,
+    validate_non_negative,
 )
 import db
 
@@ -102,12 +104,14 @@ def _planting_form(action, submit_label, varieties, planting=None):
         fast.Input(
             name="quantity_germinated",
             type="number",
+            min="0",
             placeholder="Quantity germinated",
             value=_optional_value(planting, "quantity_germinated"),
         ),
         fast.Input(
             name="quantity_culled",
             type="number",
+            min="0",
             placeholder="Quantity culled",
             value=_optional_value(planting, "quantity_culled"),
         ),
@@ -221,9 +225,18 @@ def _validate_planting_fields(variety_id, planted_date, quantity, quantity_germi
     ok, quantity_germinated = parse_optional_int(quantity_germinated)
     if not ok:
         return fast.Response("Quantity germinated must be a number.", status_code=422)
+    error = validate_non_negative(quantity_germinated, "Quantity germinated")
+    if error:
+        return fast.Response(error, status_code=422)
+    error = validate_quantity_germinated(quantity_germinated, quantity)
+    if error:
+        return fast.Response(error, status_code=422)
     ok, quantity_culled = parse_optional_int(quantity_culled)
     if not ok:
         return fast.Response("Quantity culled must be a number.", status_code=422)
+    error = validate_non_negative(quantity_culled, "Quantity culled")
+    if error:
+        return fast.Response(error, status_code=422)
     if quantity_culled is not None and (quantity_germinated is None or quantity_culled > quantity_germinated):
         return fast.Response("Quantity culled cannot exceed quantity germinated.", status_code=422)
     ok, soil_temp_f = parse_optional_float(soil_temp_f)
@@ -281,7 +294,7 @@ def _harvest_batch_form(action, plantings, checked_ids, redirect_fields=()):
     return fast.Form(
         fast.Div(*[_row(p) for p in plantings]),
         fast.Input(name="harvest_date", type="date", required=True),
-        fast.Input(name="weight_lb", type="number", step="0.01", placeholder="Weight (lb)", required=True),
+        fast.Input(name="weight_lb", type="number", step="0.01", min="0", placeholder="Weight (lb)", required=True),
         fast.Textarea("", name="notes", placeholder="Notes (optional)"),
         *redirect_fields,
         fast.Button("Log Harvest", type="submit"),
@@ -397,6 +410,9 @@ def _validate_harvest_fields(harvest_date, weight_lb):
     weight_lb, error = parse_required_float(weight_lb, "Weight")
     if error:
         return fast.Response(error, status_code=422)
+    error = validate_non_negative(weight_lb, "Weight")
+    if error:
+        return fast.Response(error, status_code=422)
     return harvest_date, weight_lb
 
 
@@ -437,7 +453,7 @@ def _harvest_form(action, harvest, planting_ids):
     return fast.Form(
         fast.P("Plantings covered: " + ", ".join(f"#{i}" for i in planting_ids)),
         fast.Input(name="harvest_date", type="date", value=harvest["harvest_date"], required=True),
-        fast.Input(name="weight_lb", type="number", step="0.01", value=harvest["weight_lb"], required=True),
+        fast.Input(name="weight_lb", type="number", step="0.01", min="0", value=harvest["weight_lb"], required=True),
         fast.Textarea(harvest["notes"] or "", name="notes", placeholder="Notes (optional)"),
         fast.Button("Save Changes", type="submit"),
         method="post",
