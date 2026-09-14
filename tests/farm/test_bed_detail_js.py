@@ -89,11 +89,36 @@ def test_staging_uses_the_garden_date_as_the_batch_planted_date(page, live_serve
     page.locator("#garden-date").fill(future_date)
     _arm_seed_variety(page, variety_id)
     page.locator('#lattice-layer circle[cx="8"][cy="8"]').click()
-    page.locator("#batch-quantity-per-point").fill("1")
+    # Future-dated: "Seeds per location" is hidden (the real count isn't known until it's actually
+    # planted -- see record_planting) so nothing to fill in before submitting.
     with page.expect_navigation():
         page.locator("#batch-plant-form button[type='submit']").click()
 
     assert db.list_plantings_for_bed(bed_id)[0]["planted_date"] == future_date
+
+
+def test_quantity_per_point_field_is_hidden_for_a_future_dated_seed_batch(page, live_server_url):
+    bed_id = _make_bed(width_ft=2, length_ft=2)
+    variety_id = _make_variety(spacing_in=8)
+    _add_seed_lot(variety_id)
+    future_date = (date.today() + timedelta(days=30)).isoformat()
+
+    page.goto(f"{live_server_url}/beds/{bed_id}")
+    page.locator("#garden-date").fill(future_date)
+    _arm_seed_variety(page, variety_id)
+
+    assert page.locator("#batch-quantity-per-point-wrap").is_hidden()
+
+
+def test_quantity_per_point_field_is_shown_for_a_present_dated_seed_batch(page, live_server_url):
+    bed_id = _make_bed(width_ft=2, length_ft=2)
+    variety_id = _make_variety(spacing_in=8)
+    _add_seed_lot(variety_id)
+
+    page.goto(f"{live_server_url}/beds/{bed_id}")
+    _arm_seed_variety(page, variety_id)
+
+    assert page.locator("#batch-quantity-per-point-wrap").is_visible()
 
 
 def _stage_one_point(page, live_server_url, spacing_in=8, color_hex="#00ff00"):

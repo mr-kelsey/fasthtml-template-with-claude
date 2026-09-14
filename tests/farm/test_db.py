@@ -1124,6 +1124,22 @@ def test_batch_add_plantings_decrements_seed_lot_by_points_times_quantity_per_po
     assert db.get_seed_lot(lot_id)["quantity_on_hand"] == 35
 
 
+def test_batch_add_plantings_allows_null_quantity_per_point():
+    variety_id = _add_variety()
+    bed_id = _add_bed()
+    db.batch_add_plantings(variety_id, "2026-12-01", bed_id, "seed", [(0, 0)], quantity_per_point=None)
+    assert db.list_plantings_for_bed(bed_id)[0]["quantity"] is None
+
+
+def test_batch_add_plantings_skips_seed_lot_decrement_when_quantity_per_point_is_none():
+    variety_id = _add_variety()
+    bed_id = _add_bed()
+    db.add_seed_lot(variety_id, quantity_on_hand=50)
+    lot_id = db.list_seed_lots_for_variety(variety_id)[0]["id"]
+    db.batch_add_plantings(variety_id, "2026-12-01", bed_id, "seed", [(0, 0), (16, 0)], quantity_per_point=None)
+    assert db.get_seed_lot(lot_id)["quantity_on_hand"] == 50
+
+
 def test_batch_add_plantings_leaves_seed_lot_untouched_in_transplant_mode():
     variety_id = _add_variety()
     bed_id = _add_bed()
@@ -1570,6 +1586,53 @@ def test_set_quantity_germinated_does_not_regenerate_farm_events():
     db.set_quantity_germinated(planting_id, 8)
     events_after = db.list_farm_events_in_range(*ALL_TIME)
     assert (len(events_after), events_after[0]["id"]) == (1, event_id_before)
+
+
+def test_record_planting_updates_only_target_planting():
+    variety_id = _add_variety()
+    planting_id = db.add_planting(variety_id, "2026-05-01")
+    other_id = db.add_planting(variety_id, "2026-05-01")
+    db.record_planting(planting_id, 12, 68.5)
+    updated, untouched = db.get_planting(planting_id), db.get_planting(other_id)
+    assert (updated["quantity"], updated["soil_temp_f"]) == (12, 68.5)
+    assert (untouched["quantity"], untouched["soil_temp_f"]) == (None, None)
+
+
+def test_record_planting_does_not_regenerate_farm_events():
+    variety_id = _add_variety(germination_days_min=5, germination_days_max=10)
+    planting_id = db.add_planting(variety_id, "2026-05-01")
+    event_id_before = db.list_farm_events_in_range(*ALL_TIME)[0]["id"]
+    db.record_planting(planting_id, 12, 68.5)
+    events_after = db.list_farm_events_in_range(*ALL_TIME)
+    assert (len(events_after), events_after[0]["id"]) == (1, event_id_before)
+
+
+def test_record_planting_decrements_seed_lot_when_quantity_first_set_on_seed_sourced_planting():
+    variety_id = _add_variety()
+    bed_id = _add_bed()
+    db.add_seed_lot(variety_id, quantity_on_hand=50)
+    lot_id = db.list_seed_lots_for_variety(variety_id)[0]["id"]
+    planting_id = db.batch_add_plantings(variety_id, "2026-12-01", bed_id, "seed", [(0, 0)], quantity_per_point=None)[0]
+    db.record_planting(planting_id, 5, None)
+    assert db.get_seed_lot(lot_id)["quantity_on_hand"] == 45
+
+
+def test_record_planting_does_not_redecrement_seed_lot_once_quantity_already_set():
+    variety_id = _add_variety()
+    planting_id = db.add_planting(variety_id, "2026-05-01", quantity=5, source_type="seed")
+    db.add_seed_lot(variety_id, quantity_on_hand=50)
+    lot_id = db.list_seed_lots_for_variety(variety_id)[0]["id"]
+    db.record_planting(planting_id, 8, None)
+    assert db.get_seed_lot(lot_id)["quantity_on_hand"] == 50
+
+
+def test_record_planting_does_not_decrement_seed_lot_for_transplant_sourced_planting():
+    variety_id = _add_variety()
+    planting_id = db.add_planting(variety_id, "2026-05-01", source_type="transplant")
+    db.add_seed_lot(variety_id, quantity_on_hand=50)
+    lot_id = db.list_seed_lots_for_variety(variety_id)[0]["id"]
+    db.record_planting(planting_id, 5, None)
+    assert db.get_seed_lot(lot_id)["quantity_on_hand"] == 50
 
 
 def test_list_plantings_in_group_returns_all_plantings_sharing_variety_and_date():

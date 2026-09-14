@@ -712,6 +712,9 @@ class FarmDatabaseMixin:
         before it matures -- None (the default) leaves shade_warning NULL on every inserted row.
         soil_temp_f isn't settable here -- it can only be measured by physically planting, which hasn't
         happened yet at batch-staging time -- see update_planting for recording it after the fact.
+        quantity_per_point may be None for a future-dated (not-yet-actually-planted) batch -- the caller
+        doesn't know the real count yet either, so quantity is left NULL on every inserted row and no seed
+        stock is drawn down; see record_planting for filling both in once the planting actually happens.
         Returns the list of new planting ids.
         """
         planting_ids = []
@@ -740,7 +743,7 @@ class FarmDatabaseMixin:
                     ),
                     {"count": len(points), "id": transplant_lot_id},
                 )
-            elif source_type == "seed":
+            elif source_type == "seed" and quantity_per_point is not None:
                 self._decrement_seed_stock(db_connection, variety_id, len(points) * quantity_per_point)
             self._regenerate_farm_events(db_connection, variety_id, planted_date)
         return planting_ids
@@ -800,6 +803,31 @@ class FarmDatabaseMixin:
                 text("UPDATE plantings SET quantity_germinated = :quantity_germinated WHERE id = :id"),
                 {"id": planting_id, "quantity_germinated": quantity_germinated},
             )
+
+    def record_planting(self, planting_id: int, quantity, soil_temp_f):
+        """Sets the actual quantity planted and soil temp for the plant-event calendar's Record form --
+        update_planting is a full-form replace. If this is the first time quantity is being set on a
+        seed-sourced planting (was NULL, e.g. a future-dated batch that deferred it -- see
+        batch_add_plantings), draws down seed_lots now by that quantity, mirroring the stock decrement
+        add_planting/batch_add_plantings perform immediately when quantity is already known at staging
+        time. Only fires once per planting: a later correction here (quantity already non-NULL) does not
+        redraw stock."""
+        with self.engine.begin() as db_connection:
+            planting = db_connection.execute(
+                text("SELECT variety_id, quantity, source_type FROM plantings WHERE id = :id"),
+                {"id": planting_id},
+            ).mappings().first()
+            db_connection.execute(
+                text("UPDATE plantings SET quantity = :quantity, soil_temp_f = :soil_temp_f WHERE id = :id"),
+                {"id": planting_id, "quantity": quantity, "soil_temp_f": soil_temp_f},
+            )
+            if (
+                planting is not None
+                and planting["source_type"] == "seed"
+                and planting["quantity"] is None
+                and quantity is not None
+            ):
+                self._decrement_seed_stock(db_connection, planting["variety_id"], quantity)
 
     def list_plantings_in_group(self, variety_id: int, planted_date: str):
         "Every planting sharing this (variety_id, planted_date) key -- the same group _regenerate_farm_events links one event to."

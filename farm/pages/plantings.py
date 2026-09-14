@@ -84,6 +84,12 @@ def _overlap_warnings(plantings):
 
 
 def _planting_form(action, submit_label, varieties, planting=None):
+    """quantity is deliberately omitted when creating a new planting (planting is None) -- how many
+    seeds actually go in the ground is only known once you've physically planted, so it's recorded
+    later via the plant-event calendar Record page (see farm_calendar.py's record_planting_route)
+    instead of guessed at staging time. It stays here on the edit form as a correction fallback for
+    the (same-day/past-dated) plantings that never get a plant reminder event, and thus never get a
+    Record link, to fix it through."""
     selected_variety_id = planting["variety_id"] if planting else None
     return fast.Form(
         fast.Select(
@@ -101,7 +107,11 @@ def _planting_form(action, submit_label, varieties, planting=None):
         fast.Input(
             name="planted_date", type="date", value=planting["planted_date"] if planting else "", required=True
         ),
-        fast.Input(name="quantity", type="number", placeholder="Quantity", value=_optional_value(planting, "quantity")),
+        *(
+            [fast.Input(name="quantity", type="number", placeholder="Quantity", value=_optional_value(planting, "quantity"))]
+            if planting is not None
+            else []
+        ),
         fast.Input(
             name="quantity_germinated",
             type="number",
@@ -198,9 +208,9 @@ def list_plantings_page():
     return layout(
         "Plantings",
         fast.H1("Plantings"),
-        *add_section,
         fast.H2("All plantings"),
         table,
+        *add_section,
     )
 
 
@@ -852,11 +862,15 @@ def batch_plant_route(
     if source_type == "seed":
         if not db.list_seed_lots_for_variety(variety_id):
             return fast.Response("This variety has no seed lots on hand.", status_code=422)
-        quantity_per_point_value, error = parse_required_int(quantity_per_point, "Seeds per location")
-        if error:
-            return fast.Response(error, status_code=422)
-        if quantity_per_point_value < 1:
-            return fast.Response("Seeds per location must be at least 1.", status_code=422)
+        is_future_planting = date.fromisoformat(planted_date) > date.today()
+        if is_future_planting and quantity_per_point.strip() == "":
+            quantity_per_point_value = None
+        else:
+            quantity_per_point_value, error = parse_required_int(quantity_per_point, "Seeds per location")
+            if error:
+                return fast.Response(error, status_code=422)
+            if quantity_per_point_value < 1:
+                return fast.Response("Seeds per location must be at least 1.", status_code=422)
     else:
         ok, lot_id = parse_optional_int(transplant_lot_id)
         if not ok or lot_id is None:

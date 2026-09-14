@@ -5,6 +5,7 @@ from fasthtml import common as fast
 
 from farm.layout import layout
 from farm.helpers import (
+    parse_optional_float,
     parse_optional_int,
     parse_required_float,
     validate_quantity_germinated,
@@ -15,7 +16,7 @@ from farm.pages.plantings import _harvest_batch_form, _validate_planting_ids
 from calendar_shared import month_grid, events_by_date, month_nav, day_square, calendar_grid
 import db
 
-RECORDABLE_EVENT_TYPES = ("germination-check", "harvest")
+RECORDABLE_EVENT_TYPES = ("plant", "germination-check", "harvest")
 
 router = fast.APIRouter()
 
@@ -219,6 +220,27 @@ def _germination_record_row(planting, event_id, year, month):
     )
 
 
+def _planting_record_row(planting, event_id, year, month):
+    return fast.Li(
+        f"#{planting['id']}",
+        fast.Form(
+            fast.Input(
+                name="quantity", type="number", min="0", placeholder="Quantity planted",
+                value=_optional_value(planting, "quantity"),
+            ),
+            fast.Input(
+                name="soil_temp_f", type="number", step="0.1", placeholder="Soil temp (F)",
+                value=_optional_value(planting, "soil_temp_f"),
+            ),
+            fast.Input(type="hidden", name="redirect_year", value=str(year)),
+            fast.Input(type="hidden", name="redirect_month", value=str(month)),
+            fast.Button("Save", type="submit"),
+            method="post",
+            action=f"/farm-calendar/{event_id}/record/planting/{planting['id']}",
+        ),
+    )
+
+
 def _group_harvest_record_row(harvest):
     "Basket-then-weigh harvesting means one harvest can span several plantings -- list which ones."
     planting_ids = db.get_harvest_planting_ids(harvest["id"])
@@ -242,7 +264,13 @@ def record_event_page(event_id: int, year: int = None, month: int = None):
         return fast.Response("Linked planting no longer exists.", status_code=404)
     variety = db.get_seed_variety(anchor["variety_id"])
     variety_label = f"{variety['common_name']} - {variety['name']}" if variety else "Unknown variety"
-    if event["event_type"] == "germination-check":
+    if event["event_type"] == "plant":
+        group = db.list_plantings_in_group(anchor["variety_id"], anchor["planted_date"])
+        content = (
+            fast.H2(f"Record planting: {variety_label}"),
+            fast.Ul(*[_planting_record_row(p, event_id, year, month) for p in group]),
+        )
+    elif event["event_type"] == "germination-check":
         group = db.list_plantings_in_group(anchor["variety_id"], anchor["planted_date"])
         reference_photo = variety_photo_img(variety, cls="variety-photo-reference") if variety else None
         content = (
@@ -272,6 +300,33 @@ def record_event_page(event_id: int, year: int = None, month: int = None):
         *content,
         fast.A("Back to calendar", href=_farm_calendar_url(year, month)),
     )
+
+
+@router("/farm-calendar/{event_id}/record/planting/{planting_id}", methods=["post"])
+def record_planting_route(
+    event_id: int, planting_id: int, quantity: str = "", soil_temp_f: str = "",
+    redirect_year: str = "", redirect_month: str = "",
+):
+    event = db.get_farm_event(event_id)
+    if event is None or event["event_type"] != "plant":
+        return fast.Response("Not found.", status_code=404)
+    planting = db.get_planting(planting_id)
+    if planting is None:
+        return fast.Response("Planting not found.", status_code=404)
+    ok, quantity_value = parse_optional_int(quantity)
+    if not ok:
+        return fast.Response("Quantity must be a number.", status_code=422)
+    error = validate_non_negative(quantity_value, "Quantity")
+    if error:
+        return fast.Response(error, status_code=422)
+    ok, soil_temp_value = parse_optional_float(soil_temp_f)
+    if not ok:
+        return fast.Response("Soil temp must be a number.", status_code=422)
+    db.record_planting(planting_id, quantity_value, soil_temp_value)
+    today = date.today()
+    year = _parse_int_or(redirect_year, today.year)
+    month = _parse_int_or(redirect_month, today.month)
+    return fast.Redirect(_farm_calendar_url(year, month, base=f"/farm-calendar/{event_id}/record"))
 
 
 @router("/farm-calendar/{event_id}/record/germination/{planting_id}", methods=["post"])

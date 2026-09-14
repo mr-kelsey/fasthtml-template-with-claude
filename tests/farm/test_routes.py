@@ -746,6 +746,20 @@ def test_add_planting_rejects_non_numeric_quantity(client):
     assert response.status_code == 422
 
 
+def test_plantings_page_omits_quantity_field_from_add_form(client):
+    _create_variety(client)
+    response = client.get("/plantings")
+    assert 'name="quantity"' not in response.text
+
+
+def test_edit_planting_page_shows_quantity_field(client):
+    variety_id = _create_variety(client)
+    client.post("/plantings", data={"variety_id": str(variety_id), "planted_date": "2026-05-01", "quantity": "10"})
+    planting_id = db.list_plantings()[0]["id"]
+    response = client.get(f"/plantings/{planting_id}/edit")
+    assert 'name="quantity"' in response.text
+
+
 def test_add_planting_persists_soil_temp_f(client):
     variety_id = _create_variety(client)
     client.post(
@@ -1668,6 +1682,36 @@ def test_batch_plant_seed_mode_rejects_zero_quantity_per_point(client):
     assert response.status_code == 422
 
 
+def test_batch_plant_seed_mode_allows_missing_quantity_per_point_when_planted_date_is_future(client):
+    plot_id = _create_plot(client)
+    bed_id = _create_bed(client, plot_id)
+    variety_id = _create_variety(client)
+    client.post("/seed-lots", data={"variety_id": str(variety_id)})
+    response = _stage_batch(
+        client, bed_id, variety_id, [(0, 0)], planted_date="2026-12-01", quantity_per_point="", follow_redirects=False
+    )
+    assert response.status_code == 303
+
+
+def test_batch_plant_seed_mode_stores_null_quantity_when_planted_date_is_future(client):
+    plot_id = _create_plot(client)
+    bed_id = _create_bed(client, plot_id)
+    variety_id = _create_variety(client)
+    client.post("/seed-lots", data={"variety_id": str(variety_id)})
+    _stage_batch(client, bed_id, variety_id, [(0, 0)], planted_date="2026-12-01", quantity_per_point="")
+    assert db.list_plantings_for_bed(bed_id)[0]["quantity"] is None
+
+
+def test_batch_plant_seed_mode_skips_seed_lot_decrement_when_planted_date_is_future(client):
+    plot_id = _create_plot(client)
+    bed_id = _create_bed(client, plot_id)
+    variety_id = _create_variety(client)
+    client.post("/seed-lots", data={"variety_id": str(variety_id), "quantity_on_hand": "50"})
+    lot_id = db.list_seed_lots()[0]["id"]
+    _stage_batch(client, bed_id, variety_id, [(0, 0), (16, 0)], planted_date="2026-12-01", quantity_per_point="")
+    assert db.get_seed_lot(lot_id)["quantity_on_hand"] == 50
+
+
 def test_batch_plant_transplant_mode_ignores_quantity_per_point(client):
     plot_id = _create_plot(client)
     bed_id = _create_bed(client, plot_id)
@@ -1950,6 +1994,116 @@ def test_post_record_germination_leaves_calendar_event_count_unchanged(client):
     planting_id = db.list_plantings()[0]["id"]
     event_id = db.list_farm_events_in_range("2000-01-01", "2100-01-01")[0]["id"]
     client.post(f"/farm-calendar/{event_id}/record/germination/{planting_id}", data={"quantity_germinated": "8"})
+    assert len(db.list_farm_events_in_range("2000-01-01", "2100-01-01")) == 1
+
+
+def test_farm_calendar_day_fragment_shows_record_link_for_plant_event(client):
+    variety_id = _create_variety(client)
+    client.post("/plantings", data={"variety_id": str(variety_id), "planted_date": "2026-12-01"})
+    event = db.list_farm_events_in_range("2000-01-01", "2100-01-01")[0]
+    response = client.get(f"/farm-calendar/day/{event['start_date']}")
+    assert "Record" in response.text
+
+
+def test_record_planting_page_lists_every_planting_in_group(client):
+    variety_id = _create_variety(client)
+    client.post("/plantings", data={"variety_id": str(variety_id), "planted_date": "2026-12-01"})
+    client.post("/plantings", data={"variety_id": str(variety_id), "planted_date": "2026-12-01"})
+    plantings = db.list_plantings()
+    event = db.list_farm_events_in_range("2000-01-01", "2100-01-01")[0]
+    response = client.get(f"/farm-calendar/{event['id']}/record")
+    assert f"#{plantings[0]['id']}" in response.text and f"#{plantings[1]['id']}" in response.text
+
+
+def test_record_planting_page_prefills_quantity_already_set(client):
+    variety_id = _create_variety(client)
+    client.post("/plantings", data={"variety_id": str(variety_id), "planted_date": "2026-12-01", "quantity": "3"})
+    event = db.list_farm_events_in_range("2000-01-01", "2100-01-01")[0]
+    response = client.get(f"/farm-calendar/{event['id']}/record")
+    assert 'value="3"' in response.text
+
+
+def test_post_record_planting_updates_target_planting_quantity_and_soil_temp(client):
+    variety_id = _create_variety(client)
+    client.post("/plantings", data={"variety_id": str(variety_id), "planted_date": "2026-12-01"})
+    planting_id = db.list_plantings()[0]["id"]
+    event_id = db.list_farm_events_in_range("2000-01-01", "2100-01-01")[0]["id"]
+    client.post(
+        f"/farm-calendar/{event_id}/record/planting/{planting_id}",
+        data={"quantity": "12", "soil_temp_f": "68.5"},
+    )
+    planting = db.get_planting(planting_id)
+    assert (planting["quantity"], planting["soil_temp_f"]) == (12, 68.5)
+
+
+def test_post_record_planting_decrements_seed_lot_on_first_quantity(client):
+    plot_id = _create_plot(client)
+    bed_id = _create_bed(client, plot_id)
+    variety_id = _create_variety(client)
+    client.post("/seed-lots", data={"variety_id": str(variety_id), "quantity_on_hand": "50"})
+    lot_id = db.list_seed_lots()[0]["id"]
+    _stage_batch(client, bed_id, variety_id, [(0, 0)], planted_date="2026-12-01", quantity_per_point="")
+    planting_id = db.list_plantings_for_bed(bed_id)[0]["id"]
+    event_id = db.list_farm_events_in_range("2000-01-01", "2100-01-01")[0]["id"]
+    client.post(f"/farm-calendar/{event_id}/record/planting/{planting_id}", data={"quantity": "5"})
+    assert db.get_seed_lot(lot_id)["quantity_on_hand"] == 45
+
+
+def test_post_record_planting_stays_on_record_page_instead_of_redirecting_to_calendar(client):
+    variety_id = _create_variety(client)
+    client.post("/plantings", data={"variety_id": str(variety_id), "planted_date": "2026-12-01"})
+    planting_id = db.list_plantings()[0]["id"]
+    event_id = db.list_farm_events_in_range("2000-01-01", "2100-01-01")[0]["id"]
+    response = client.post(
+        f"/farm-calendar/{event_id}/record/planting/{planting_id}",
+        data={"quantity": "12", "soil_temp_f": "68.5"},
+        follow_redirects=False,
+    )
+    assert response.headers["location"] == f"/farm-calendar/{event_id}/record?year={date.today().year}&month={date.today().month}"
+
+
+def test_post_record_planting_rejects_non_numeric_quantity(client):
+    variety_id = _create_variety(client)
+    client.post("/plantings", data={"variety_id": str(variety_id), "planted_date": "2026-12-01"})
+    planting_id = db.list_plantings()[0]["id"]
+    event_id = db.list_farm_events_in_range("2000-01-01", "2100-01-01")[0]["id"]
+    response = client.post(
+        f"/farm-calendar/{event_id}/record/planting/{planting_id}", data={"quantity": "a lot"}
+    )
+    assert response.status_code == 422
+
+
+def test_post_record_planting_rejects_negative_quantity(client):
+    variety_id = _create_variety(client)
+    client.post("/plantings", data={"variety_id": str(variety_id), "planted_date": "2026-12-01"})
+    planting_id = db.list_plantings()[0]["id"]
+    event_id = db.list_farm_events_in_range("2000-01-01", "2100-01-01")[0]["id"]
+    response = client.post(
+        f"/farm-calendar/{event_id}/record/planting/{planting_id}", data={"quantity": "-2"}
+    )
+    assert response.status_code == 422
+
+
+def test_post_record_planting_rejects_non_numeric_soil_temp(client):
+    variety_id = _create_variety(client)
+    client.post("/plantings", data={"variety_id": str(variety_id), "planted_date": "2026-12-01"})
+    planting_id = db.list_plantings()[0]["id"]
+    event_id = db.list_farm_events_in_range("2000-01-01", "2100-01-01")[0]["id"]
+    response = client.post(
+        f"/farm-calendar/{event_id}/record/planting/{planting_id}", data={"soil_temp_f": "warm"}
+    )
+    assert response.status_code == 422
+
+
+def test_post_record_planting_leaves_calendar_event_count_unchanged(client):
+    variety_id = _create_variety(client)
+    client.post("/plantings", data={"variety_id": str(variety_id), "planted_date": "2026-12-01"})
+    planting_id = db.list_plantings()[0]["id"]
+    event_id = db.list_farm_events_in_range("2000-01-01", "2100-01-01")[0]["id"]
+    client.post(
+        f"/farm-calendar/{event_id}/record/planting/{planting_id}",
+        data={"quantity": "12", "soil_temp_f": "68.5"},
+    )
     assert len(db.list_farm_events_in_range("2000-01-01", "2100-01-01")) == 1
 
 

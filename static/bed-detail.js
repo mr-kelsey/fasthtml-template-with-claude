@@ -206,6 +206,12 @@
         if (lot) lot_quantity_input.value = lot.quantity_on_hand;
     }
 
+    function garden_date_is_future() {
+        if (!garden_date_input || !garden_date_input.value) return false;
+        var today_iso = new Date().toISOString().slice(0, 10);
+        return garden_date_input.value > today_iso;
+    }
+
     function update_batch_form() {
         if (!state.armed_variety) {
             batch_form.hidden = true;
@@ -218,7 +224,10 @@
         batch_staged_count.textContent = state.staged_points.length + " point(s) staged";
         lot_select.hidden = state.mode !== "transplant";
         if (state.mode === "transplant") populate_lot_select();
-        quantity_per_point_wrap.hidden = state.mode !== "seed";
+        // A future-dated batch hasn't actually been planted yet, so the real seed count isn't known --
+        // it's recorded later via the plant-event calendar Record page instead of guessed here.
+        quantity_per_point_wrap.hidden = state.mode !== "seed" || garden_date_is_future();
+        if (quantity_per_point_wrap.hidden) quantity_per_point_wrap.querySelector("input").value = "";
         sync_lot_quantity_input();
     }
 
