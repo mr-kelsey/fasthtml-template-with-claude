@@ -18,7 +18,7 @@ from main import app as _live_app
 _FARM_TABLES = (
     "farm_events", "product_applications", "garden_products", "harvests", "plantings",
     "companion_rules", "seed_lots", "transplant_lots", "seed_varieties",
-    "shade_polygons", "shade_sources", "beds", "land_plots",
+    "shade_polygons", "shade_sources", "beds", "land_plots", "farm_settings",
 )
 
 

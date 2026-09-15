@@ -2,7 +2,7 @@ from datetime import date, timedelta
 
 from sqlalchemy import text
 
-from farm.helpers import compute_window
+from farm.helpers import compute_window, frost_risk_windows
 
 
 def _migrate_harvest_planting_ids(db_connection):
@@ -206,6 +206,15 @@ SCHEMA_STATEMENTS = [
     ("beds", "grid_offset_x_in", "REAL NOT NULL DEFAULT 0"),
     ("beds", "grid_offset_y_in", "REAL NOT NULL DEFAULT 0"),
     ("seed_varieties", "photo_path", "TEXT"),
+    ("seed_varieties", "frost_tolerance", "TEXT"),
+    ("farm_events", "is_critical", "INTEGER NOT NULL DEFAULT 0"),
+    """
+    CREATE TABLE IF NOT EXISTS farm_settings (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        last_frost_date TEXT,
+        first_frost_date TEXT
+    )
+    """,
 ]
 
 _AGRONOMIC_COLUMNS = (
@@ -220,7 +229,7 @@ _SOIL_FEEDING_COLUMNS = (
 
 _SEED_VARIETY_COLUMNS = (
     f"id, common_name, name, plant_family, genus, species, {_AGRONOMIC_COLUMNS}, {_SOIL_FEEDING_COLUMNS}, "
-    "color_hex, photo_path, created_at"
+    "color_hex, photo_path, frost_tolerance, created_at"
 )
 
 _PLANTING_COLUMNS = (
@@ -259,7 +268,7 @@ _SHADE_SOURCE_COLUMNS = "id, plot_id, label, created_at"
 _SHADE_POLYGON_COLUMNS = "id, shade_source_id, season, shade_type, points, created_at"
 
 _FARM_EVENT_COLUMNS = (
-    "fe.id, fe.event_type, fe.title, fe.start_date, fe.end_date, fe.notes, "
+    "fe.id, fe.event_type, fe.title, fe.start_date, fe.end_date, fe.notes, fe.is_critical, "
     "fe.linked_planting_id, fe.linked_product_application_id, fe.created_at"
 )
 
@@ -296,9 +305,11 @@ _SEED_VARIETY_OPTIONAL_FIELDS = (
     "spacing_in", "sun_needs", "water_needs",
     "soil_type", "soil_ph_min", "soil_ph_max", "feeding_frequency_days",
     "growth_npk_n", "growth_npk_p", "growth_npk_k", "produce_npk_n", "produce_npk_p", "produce_npk_k",
-    "color_hex", "photo_path",
+    "color_hex", "photo_path", "frost_tolerance",
 )
-_SEED_VARIETY_TEXT_FIELDS = ("genus", "species", "sun_needs", "water_needs", "soil_type", "color_hex", "photo_path")
+_SEED_VARIETY_TEXT_FIELDS = (
+    "genus", "species", "sun_needs", "water_needs", "soil_type", "color_hex", "photo_path", "frost_tolerance",
+)
 
 
 def _seed_variety_fields(**kwargs):
@@ -335,13 +346,13 @@ class FarmDatabaseMixin:
                     "spacing_in, sun_needs, water_needs, "
                     "soil_type, soil_ph_min, soil_ph_max, feeding_frequency_days, "
                     "growth_npk_n, growth_npk_p, growth_npk_k, produce_npk_n, produce_npk_p, produce_npk_k, "
-                    "color_hex, photo_path) "
+                    "color_hex, photo_path, frost_tolerance) "
                     "VALUES (:common_name, :name, :plant_family, :genus, :species, "
                     ":germination_days_min, :germination_days_max, :days_to_maturity_min, :days_to_maturity_max, "
                     ":spacing_in, :sun_needs, :water_needs, "
                     ":soil_type, :soil_ph_min, :soil_ph_max, :feeding_frequency_days, "
                     ":growth_npk_n, :growth_npk_p, :growth_npk_k, :produce_npk_n, :produce_npk_p, :produce_npk_k, "
-                    ":color_hex, :photo_path)"
+                    ":color_hex, :photo_path, :frost_tolerance)"
                 ),
                 {"common_name": common_name, "name": name, "plant_family": plant_family, **fields},
             )
@@ -361,7 +372,7 @@ class FarmDatabaseMixin:
                     "feeding_frequency_days = :feeding_frequency_days, "
                     "growth_npk_n = :growth_npk_n, growth_npk_p = :growth_npk_p, growth_npk_k = :growth_npk_k, "
                     "produce_npk_n = :produce_npk_n, produce_npk_p = :produce_npk_p, produce_npk_k = :produce_npk_k, "
-                    "color_hex = :color_hex, photo_path = :photo_path "
+                    "color_hex = :color_hex, photo_path = :photo_path, frost_tolerance = :frost_tolerance "
                     "WHERE id = :id"
                 ),
                 {"id": variety_id, "common_name": common_name, "name": name, "plant_family": plant_family, **fields},
@@ -632,7 +643,7 @@ class FarmDatabaseMixin:
                     "p.transplant_lot_id, p.source_type, p.shade_warning, p.created_at, "
                     "sv.name AS variety_name, sv.common_name, "
                     "sv.germination_days_min, sv.germination_days_max, "
-                    "sv.days_to_maturity_min, sv.days_to_maturity_max, "
+                    "sv.days_to_maturity_min, sv.days_to_maturity_max, sv.frost_tolerance, "
                     "b.label AS bed_label, lp.name AS plot_name "
                     "FROM plantings p "
                     "LEFT JOIN seed_varieties sv ON sv.id = p.variety_id "
@@ -946,28 +957,33 @@ class FarmDatabaseMixin:
 
     def _insert_farm_event_row(
         self, db_connection, event_type, title, start_date, end_date, linked_planting_id, notes=None,
-        linked_product_application_id=None,
+        linked_product_application_id=None, is_critical=False,
     ):
         db_connection.execute(
             text(
                 "INSERT INTO farm_events (event_type, title, start_date, end_date, notes, linked_planting_id, "
-                "linked_product_application_id) "
+                "linked_product_application_id, is_critical) "
                 "VALUES (:event_type, :title, :start_date, :end_date, :notes, :linked_planting_id, "
-                ":linked_product_application_id)"
+                ":linked_product_application_id, :is_critical)"
             ),
             {
                 "event_type": event_type, "title": title, "start_date": start_date, "end_date": end_date,
                 "notes": notes, "linked_planting_id": linked_planting_id,
-                "linked_product_application_id": linked_product_application_id,
+                "linked_product_application_id": linked_product_application_id, "is_critical": is_critical,
             },
         )
 
-    def _insert_milestone_events(self, db_connection, linked_planting_id, variety, planted_date, variety_label, source_type):
-        """Inserts plant/germination-check/harvest rows for a planting, skipping any window that's unknown.
-        Germination-check is additionally gated on source_type == 'seed' -- a transplant already germinated
-        elsewhere (or was purchased), so there's nothing to check on-site. The plant reminder is gated on
-        planted_date being in the future -- a planting recorded for today or the past already happened, so
-        there's nothing left to remind about.
+    def _insert_milestone_events(
+        self, db_connection, linked_planting_id, variety, planted_date, variety_label, source_type, farm_settings,
+    ):
+        """Inserts plant/germination-check/harvest/frost-cover rows for a planting, skipping any window
+        that's unknown. Germination-check is additionally gated on source_type == 'seed' -- a transplant
+        already germinated elsewhere (or was purchased), so there's nothing to check on-site. The plant
+        reminder is gated on planted_date being in the future -- a planting recorded for today or the past
+        already happened, so there's nothing left to remind about. frost-cover is a one-time snapshot from
+        farm_settings' average frost dates (unlike the live, recomputed-per-render frost warning on the
+        all-plantings page) -- it's a physical reminder to go cover a crop on specific days, not something
+        that should silently shift after the fact.
         """
         if date.fromisoformat(planted_date) > date.today():
             self._insert_farm_event_row(
@@ -987,16 +1003,25 @@ class FarmDatabaseMixin:
                 db_connection, "harvest", f"Expected harvest: {variety_label}",
                 harvest_window[0].isoformat(), harvest_window[1].isoformat(), linked_planting_id,
             )
+            for start, end in frost_risk_windows(
+                date.fromisoformat(planted_date), harvest_window[1], variety["frost_tolerance"],
+                farm_settings["last_frost_date"], farm_settings["first_frost_date"],
+            ):
+                self._insert_farm_event_row(
+                    db_connection, "frost-cover", f"Cover {variety_label} (frost risk)",
+                    start.isoformat(), end.isoformat(), linked_planting_id, is_critical=True,
+                )
 
     def _regenerate_farm_events(self, db_connection, variety_id, planted_date):
-        """Recomputes the germination-check/harvest event pair for every planting sharing this
+        """Recomputes the germination-check/harvest/frost-cover events for every planting sharing this
         (variety, planted_date) key -- same variety, same day is one calendar reminder regardless of bed
         placement. Linked to the lowest planting id in the group, so an edit anywhere in the group can only
         be gotten right by throwing away and rebuilding the whole group's events, not patching one planting.
         """
         db_connection.execute(
             text(
-                "DELETE FROM farm_events WHERE event_type IN ('plant', 'germination-check', 'harvest') "
+                "DELETE FROM farm_events "
+                "WHERE event_type IN ('plant', 'germination-check', 'harvest', 'frost-cover') "
                 "AND linked_planting_id IN "
                 "(SELECT id FROM plantings WHERE variety_id = :variety_id AND planted_date = :planted_date)"
             ),
@@ -1006,7 +1031,7 @@ class FarmDatabaseMixin:
             text(
                 "SELECT p.id, p.source_type, sv.common_name, sv.name, "
                 "sv.germination_days_min, sv.germination_days_max, "
-                "sv.days_to_maturity_min, sv.days_to_maturity_max "
+                "sv.days_to_maturity_min, sv.days_to_maturity_max, sv.frost_tolerance "
                 "FROM plantings p JOIN seed_varieties sv ON sv.id = p.variety_id "
                 "WHERE p.variety_id = :variety_id AND p.planted_date = :planted_date"
             ),
@@ -1016,7 +1041,12 @@ class FarmDatabaseMixin:
             return
         anchor = min(group_rows, key=lambda row: row["id"])
         variety_label = f"{anchor['common_name']} - {anchor['name']}"
-        self._insert_milestone_events(db_connection, anchor["id"], anchor, planted_date, variety_label, anchor["source_type"])
+        farm_settings = db_connection.execute(
+            text("SELECT last_frost_date, first_frost_date FROM farm_settings WHERE id = 1")
+        ).mappings().first() or {"last_frost_date": None, "first_frost_date": None}
+        self._insert_milestone_events(
+            db_connection, anchor["id"], anchor, planted_date, variety_label, anchor["source_type"], farm_settings,
+        )
 
     def add_farm_event(
         self, event_type: str, title: str, start_date: str, end_date: str, notes: str = None, linked_planting_id: int = None
@@ -1024,6 +1054,26 @@ class FarmDatabaseMixin:
         with self.engine.begin() as db_connection:
             self._insert_farm_event_row(
                 db_connection, event_type, title, start_date, end_date, linked_planting_id, notes=notes
+            )
+
+    def get_farm_settings(self):
+        "The singleton farm-wide settings row (id=1), or a dict of Nones if it's never been set."
+        with self.engine.connect() as db_connection:
+            row = db_connection.execute(
+                text("SELECT last_frost_date, first_frost_date FROM farm_settings WHERE id = 1")
+            ).mappings().first()
+        return row or {"last_frost_date": None, "first_frost_date": None}
+
+    def update_farm_settings(self, last_frost_date: str = None, first_frost_date: str = None):
+        with self.engine.begin() as db_connection:
+            db_connection.execute(
+                text(
+                    "INSERT INTO farm_settings (id, last_frost_date, first_frost_date) "
+                    "VALUES (1, :last_frost_date, :first_frost_date) "
+                    "ON CONFLICT (id) DO UPDATE SET "
+                    "last_frost_date = :last_frost_date, first_frost_date = :first_frost_date"
+                ),
+                {"last_frost_date": last_frost_date, "first_frost_date": first_frost_date},
             )
 
     def list_farm_events_in_range(self, range_start: str, range_end: str):

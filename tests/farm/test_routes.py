@@ -10,6 +10,43 @@ _PNG_BYTES = base64.b64decode(
 )
 
 
+def test_farm_settings_page_returns_200(client):
+    response = client.get("/farm-settings")
+    assert response.status_code == 200
+
+
+def test_farm_settings_page_shows_blank_fields_when_unset(client):
+    response = client.get("/farm-settings")
+    assert 'name="last_frost_date" type="date" value=""' in response.text
+
+
+def test_update_farm_settings_redirects_with_303(client):
+    response = client.post(
+        "/farm-settings",
+        data={"last_frost_date": "2026-04-15", "first_frost_date": "2026-10-15"},
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+
+
+def test_update_farm_settings_persists_dates(client):
+    client.post("/farm-settings", data={"last_frost_date": "2026-04-15", "first_frost_date": "2026-10-15"})
+    assert db.get_farm_settings() == {"last_frost_date": "2026-04-15", "first_frost_date": "2026-10-15"}
+
+
+def test_farm_settings_page_preselects_current_dates(client):
+    client.post("/farm-settings", data={"last_frost_date": "2026-04-15", "first_frost_date": "2026-10-15"})
+    response = client.get("/farm-settings")
+    assert 'name="last_frost_date" type="date" value="2026-04-15"' in response.text
+
+
+def test_update_farm_settings_rejects_invalid_last_frost_date(client):
+    response = client.post(
+        "/farm-settings", data={"last_frost_date": "not-a-date", "first_frost_date": "2026-10-15"}
+    )
+    assert response.status_code == 422
+
+
 def test_seed_varieties_page_returns_200(client):
     response = client.get("/seed-varieties")
     assert response.status_code == 200
@@ -164,6 +201,62 @@ def test_edit_seed_variety_page_preselects_current_sun_needs(client):
     variety_id = db.list_seed_varieties()[0]["id"]
     response = client.get(f"/seed-varieties/{variety_id}/edit")
     assert '<option value="partial_shade" selected' in response.text
+
+
+def test_add_seed_variety_accepts_valid_frost_tolerance(client):
+    response = client.post(
+        "/seed-varieties",
+        data={
+            "common_name": "Tomato", "name": "Cherokee Purple", "plant_family": "Solanaceae",
+            "frost_tolerance": "tender",
+        },
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+
+
+def test_add_seed_variety_persists_frost_tolerance(client):
+    client.post(
+        "/seed-varieties",
+        data={
+            "common_name": "Tomato", "name": "Cherokee Purple", "plant_family": "Solanaceae",
+            "frost_tolerance": "tender",
+        },
+    )
+    assert db.list_seed_varieties()[0]["frost_tolerance"] == "tender"
+
+
+def test_add_seed_variety_allows_blank_frost_tolerance(client):
+    response = client.post(
+        "/seed-varieties",
+        data={"common_name": "Tomato", "name": "Cherokee Purple", "plant_family": "Solanaceae", "frost_tolerance": ""},
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+
+
+def test_add_seed_variety_rejects_invalid_frost_tolerance(client):
+    response = client.post(
+        "/seed-varieties",
+        data={
+            "common_name": "Tomato", "name": "Cherokee Purple", "plant_family": "Solanaceae",
+            "frost_tolerance": "kinda-hardy",
+        },
+    )
+    assert response.status_code == 422
+
+
+def test_edit_seed_variety_page_preselects_current_frost_tolerance(client):
+    client.post(
+        "/seed-varieties",
+        data={
+            "common_name": "Tomato", "name": "Cherokee Purple", "plant_family": "Solanaceae",
+            "frost_tolerance": "half_hardy",
+        },
+    )
+    variety_id = db.list_seed_varieties()[0]["id"]
+    response = client.get(f"/seed-varieties/{variety_id}/edit")
+    assert '<option value="half_hardy" selected' in response.text
 
 
 def test_edit_seed_variety_updates_name(client):
@@ -782,6 +875,41 @@ def test_plantings_page_shows_shade_risk_warning_for_flagged_planting(client):
     _stage_batch(client, bed_id, variety_id, [(0, 0)], planted_date="2026-06-01")
     response = client.get("/plantings")
     assert "Shade risk before maturity" in response.text
+
+
+def test_plantings_page_shows_frost_risk_warning_for_tender_planting_before_last_frost(client):
+    client.post("/farm-settings", data={"last_frost_date": "2026-04-15", "first_frost_date": "2026-10-15"})
+    variety_id = _create_variety(
+        client, frost_tolerance="tender", days_to_maturity_min="60", days_to_maturity_max="70"
+    )
+    client.post("/plantings", data={"variety_id": str(variety_id), "planted_date": "2026-04-01"})
+    response = client.get("/plantings")
+    assert "Frost risk before maturity" in response.text
+
+
+def test_plantings_page_omits_frost_risk_warning_for_hardy_planting(client):
+    client.post("/farm-settings", data={"last_frost_date": "2026-04-15", "first_frost_date": "2026-10-15"})
+    variety_id = _create_variety(
+        client, frost_tolerance="hardy", days_to_maturity_min="60", days_to_maturity_max="70"
+    )
+    client.post("/plantings", data={"variety_id": str(variety_id), "planted_date": "2026-04-01"})
+    response = client.get("/plantings")
+    assert "Frost risk before maturity" not in response.text
+
+
+def test_plantings_page_frost_risk_warning_updates_live_when_farm_settings_change(client):
+    "Proves the warning is recomputed on each render from current farm_settings, not snapshotted at planting time."
+    variety_id = _create_variety(
+        client, frost_tolerance="tender", days_to_maturity_min="60", days_to_maturity_max="70"
+    )
+    client.post("/plantings", data={"variety_id": str(variety_id), "planted_date": "2026-04-01"})
+    client.post("/farm-settings", data={"last_frost_date": "2026-03-01", "first_frost_date": "2026-10-15"})
+    response = client.get("/plantings")
+    assert "Frost risk before maturity" not in response.text
+
+    client.post("/farm-settings", data={"last_frost_date": "2026-04-15", "first_frost_date": "2026-10-15"})
+    response = client.get("/plantings")
+    assert "Frost risk before maturity" in response.text
 
 
 def test_add_planting_rejects_unknown_variety_id(client):
@@ -1916,6 +2044,33 @@ def test_generated_farm_event_appears_on_calendar_grid(client):
     assert "Cherokee Purple" in response.text
 
 
+def test_farm_calendar_shows_critical_day_square_for_frost_cover_event(client):
+    client.post("/farm-settings", data={"last_frost_date": "2026-04-15", "first_frost_date": "2026-10-15"})
+    variety_id = _create_variety(
+        client, frost_tolerance="tender", days_to_maturity_min="60", days_to_maturity_max="70"
+    )
+    client.post("/plantings", data={"variety_id": str(variety_id), "planted_date": "2026-04-01"})
+    response = client.get(_farm_calendar_url(2026, 4))
+    assert "critical-day" in response.text
+
+
+def test_farm_calendar_has_no_critical_day_square_without_frost_cover_event(client):
+    variety_id = _create_variety(client, days_to_maturity_min="60", days_to_maturity_max="70")
+    client.post("/plantings", data={"variety_id": str(variety_id), "planted_date": "2026-05-01"})
+    response = client.get(_farm_calendar_url(2026, 5))
+    assert "critical-day" not in response.text
+
+
+def test_farm_calendar_day_fragment_shows_frost_cover_event_title(client):
+    client.post("/farm-settings", data={"last_frost_date": "2026-04-15", "first_frost_date": "2026-10-15"})
+    variety_id = _create_variety(
+        client, frost_tolerance="tender", days_to_maturity_min="60", days_to_maturity_max="70"
+    )
+    client.post("/plantings", data={"variety_id": str(variety_id), "planted_date": "2026-04-01"})
+    response = client.get("/farm-calendar/day/2026-04-01")
+    assert "frost risk" in response.text
+
+
 def test_delete_custom_farm_event_removes_it(client):
     client.post("/farm-calendar", data={"title": "To delete", "event_type": "custom", "start_date": "2026-09-10"})
     event_id = db.list_farm_events_in_range("2000-01-01", "2100-01-01")[0]["id"]
@@ -2581,6 +2736,46 @@ def test_bed_rotation_warning_true_when_same_family_planted_recently_in_that_bed
     body = response.json()
     assert body["conflict"] is True
     assert body["detail"]["planted_date"] == "2025-05-01"
+
+
+def test_bed_frost_warning_returns_404_when_bed_not_found(client):
+    variety_id = _create_variety(client)
+    response = client.post(
+        "/beds/999999/frost-warning", data={"variety_id": str(variety_id), "planted_date": "2026-04-01"}
+    )
+    assert response.status_code == 404
+
+
+def test_bed_frost_warning_false_when_farm_settings_unset(client):
+    plot_id = _create_plot(client)
+    bed_id = _create_bed(client, plot_id)
+    variety_id = _create_variety(client, frost_tolerance="tender", days_to_maturity_min="60", days_to_maturity_max="70")
+    response = client.post(
+        f"/beds/{bed_id}/frost-warning", data={"variety_id": str(variety_id), "planted_date": "2026-04-01"}
+    )
+    assert response.json()["at_risk"] is False
+
+
+def test_bed_frost_warning_true_for_tender_variety_before_last_frost(client):
+    client.post("/farm-settings", data={"last_frost_date": "2026-04-15", "first_frost_date": "2026-10-15"})
+    plot_id = _create_plot(client)
+    bed_id = _create_bed(client, plot_id)
+    variety_id = _create_variety(client, frost_tolerance="tender", days_to_maturity_min="60", days_to_maturity_max="70")
+    response = client.post(
+        f"/beds/{bed_id}/frost-warning", data={"variety_id": str(variety_id), "planted_date": "2026-04-01"}
+    )
+    assert response.json()["at_risk"] is True
+
+
+def test_bed_frost_warning_false_for_hardy_variety_before_last_frost(client):
+    client.post("/farm-settings", data={"last_frost_date": "2026-04-15", "first_frost_date": "2026-10-15"})
+    plot_id = _create_plot(client)
+    bed_id = _create_bed(client, plot_id)
+    variety_id = _create_variety(client, frost_tolerance="hardy", days_to_maturity_min="60", days_to_maturity_max="70")
+    response = client.post(
+        f"/beds/{bed_id}/frost-warning", data={"variety_id": str(variety_id), "planted_date": "2026-04-01"}
+    )
+    assert response.json()["at_risk"] is False
 
 
 def test_batch_plant_marks_shade_warning_true_when_full_sun_variety_planted_in_full_shade(client):

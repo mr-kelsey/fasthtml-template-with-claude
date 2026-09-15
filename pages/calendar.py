@@ -84,9 +84,9 @@ def _family_day_square(day_date, in_current_month, is_today, events_for_day, rec
         fast.Div(*[_event_bar(event) for event in events_for_day], cls="event-bars"),
         fast.Div(*[_recurring_label(r) for r in recurring_for_day], cls="recurring-labels"),
     ]
-    extra_classes = ["critical-day"] if any(event["is_critical"] for event in events_for_day) else []
+    critical = any(event["is_critical"] for event in events_for_day)
     day_url = _calendar_url(year, month, member_id, base=f"/calendar/day/{day_date.isoformat()}")
-    return day_square(day_date, in_current_month, is_today, badges, day_url, extra_classes=extra_classes)
+    return day_square(day_date, in_current_month, is_today, badges, day_url, critical=critical)
 
 
 def _calendar_grid(weeks, month, events_map, recurring_by_date, today, year, member_id):

@@ -12,6 +12,7 @@ from farm.helpers import (
     parse_required_int,
     parse_required_float,
     compute_window,
+    frost_exceeds_tolerance,
     validate_quantity_germinated,
     validate_non_negative,
     variety_photo_img,
@@ -153,12 +154,17 @@ def _bed_location_cell(planting):
     return fast.Div(label, fast.Div(f"{planting['x_in']:g}in, {planting['y_in']:g}in", cls="bed-position"))
 
 
-def _planting_row(planting, warnings):
+def _planting_row(planting, warnings, farm_settings):
     row_warnings = list(warnings.get(planting["id"], []))
     if planting["shade_warning"]:
         row_warnings.append("Shade risk before maturity")
     germination_window = compute_window(planting["planted_date"], planting["germination_days_min"], planting["germination_days_max"])
     harvest_window = compute_window(planting["planted_date"], planting["days_to_maturity_min"], planting["days_to_maturity_max"])
+    if harvest_window and frost_exceeds_tolerance(
+        date.fromisoformat(planting["planted_date"]), harvest_window[1], planting["frost_tolerance"],
+        farm_settings["last_frost_date"], farm_settings["first_frost_date"],
+    ):
+        row_warnings.append("Frost risk before maturity")
     return fast.Tr(
         fast.Td(planting["id"]),
         fast.Td(planting["variety_name"] or ""),
@@ -186,12 +192,13 @@ def list_plantings_page():
     varieties = db.list_seed_varieties()
     plantings = db.list_plantings()
     warnings = _overlap_warnings(plantings)
+    farm_settings = db.get_farm_settings()
     headers = [
         "ID", "Variety", "Common Name", "Planted", "Bed", "Qty", "Germinated",
         "Germination window", "Harvest window", "Warnings", "",
     ]
     rows = (
-        [_planting_row(p, warnings) for p in plantings]
+        [_planting_row(p, warnings, farm_settings) for p in plantings]
         if plantings
         else [fast.Tr(fast.Td("No plantings yet.", colspan=str(len(headers))))]
     )
@@ -856,6 +863,7 @@ def bed_detail_page(bed_id: int, on_date: str = None):
         _grid_offset_controls(),
         _zoom_controls(),
         fast.Div(id="rotation-warning", hidden=True),
+        fast.Div(id="frost-warning", hidden=True),
         fast.Script(json.dumps(data), type="application/json", id="bed-detail-data"),
         fast.Div(fast.Div(canvas, id="bed-canvas-wrap", cls="bed-detail-canvas-wrap"), palette, cls="bed-detail-layout"),
         _batch_plant_form(bed_id),
@@ -1048,6 +1056,33 @@ def bed_rotation_warning_route(bed_id: int, variety_id: str, planted_date: str):
         else None
     )
     return fast.Response(json.dumps({"conflict": conflict is not None, "detail": detail}), media_type="application/json")
+
+
+@router("/beds/{bed_id}/frost-warning", methods=["post"])
+def bed_frost_warning_route(bed_id: int, variety_id: str, planted_date: str):
+    """Advisory only, decoration like /shade-warnings and /rotation-warning above -- never blocks
+    planting. Unlike shade, frost risk doesn't vary by bed position, so this is a single banner check
+    rather than a per-point one -- see helpers.frost_exceeds_tolerance. Uses the farm's current average
+    frost dates (a one-time, average-date check is fine here, per the same reasoning as the
+    frost-cover calendar event -- this is a snapshot-in-time nudge at staging time, not a live indicator)."""
+    bed = db.get_bed(bed_id)
+    if bed is None:
+        return fast.Response("Bed not found.", status_code=404)
+    validated_variety_id = _validate_variety_id(variety_id)
+    if isinstance(validated_variety_id, fast.Response):
+        return validated_variety_id
+    variety = db.get_seed_variety(validated_variety_id)
+    parsed_planted_date = _parse_date_or_none(planted_date)
+    if parsed_planted_date is None:
+        return fast.Response("Invalid planted date.", status_code=422)
+    window = compute_window(planted_date, variety["days_to_maturity_min"], variety["days_to_maturity_max"])
+    maturity_end = window[1] if window else parsed_planted_date
+    farm_settings = db.get_farm_settings()
+    at_risk = frost_exceeds_tolerance(
+        parsed_planted_date, maturity_end, variety["frost_tolerance"],
+        farm_settings["last_frost_date"], farm_settings["first_frost_date"],
+    )
+    return fast.Response(json.dumps({"at_risk": at_risk}), media_type="application/json")
 
 
 @router("/beds/{bed_id}/grid-offset", methods=["post"])

@@ -42,13 +42,19 @@ def month_nav(year, month, url_fn):
     )
 
 
-def day_square(day_date, in_current_month, is_today, badges, day_url, extra_classes=()):
-    "badges is a list of pre-rendered fast.Div elements; day_url is the hx-get target for that day's dialog."
+def day_square(day_date, in_current_month, is_today, badges, day_url, extra_classes=(), critical=False):
+    """badges is a list of pre-rendered fast.Div elements; day_url is the hx-get target for that day's
+    dialog. critical is a generic "this day needs to visually stand out" flag -- shared by both
+    calendars, not tied to any one event type -- for a caller to set when any event landing on this day
+    is significant enough that it shouldn't blend into a busy month (originally the family calendar's
+    is_critical events; also used by the farm calendar's frost-cover reminders)."""
     classes = ["day-square", *extra_classes]
     if not in_current_month:
         classes.append("outside-month")
     if is_today:
         classes.append("today")
+    if critical:
+        classes.append("critical-day")
     return fast.Div(
         fast.Div(str(day_date.day), cls="day-number"),
         *badges,

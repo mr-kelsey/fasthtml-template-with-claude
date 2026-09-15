@@ -126,6 +126,11 @@ table form {
     border-radius: 2px;
 }
 
+.event-bar.critical {
+    height: 0.6rem;
+    border: 1px solid #d62828;
+}
+
 .recurring-labels {
     margin-top: auto;
     display: flex;
@@ -529,6 +534,13 @@ button.variety-palette-item.armed {
 #rotation-warning {
     border: 1px solid #f0ad4e;
     color: #f0ad4e;
+    padding: 0.5rem 0.75rem;
+    margin-block: 0.5rem;
+}
+
+#frost-warning {
+    border: 1px solid #d62828;
+    color: #d62828;
     padding: 0.5rem 0.75rem;
     margin-block: 0.5rem;
 }

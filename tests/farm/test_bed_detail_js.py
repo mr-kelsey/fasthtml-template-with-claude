@@ -445,6 +445,44 @@ def test_rotation_warning_banner_stays_hidden_with_no_matching_family_history(pa
     assert not page.locator("#rotation-warning").is_visible()
 
 
+def test_frost_warning_banner_appears_for_tender_variety_before_last_frost(page, live_server_url):
+    db.update_farm_settings(last_frost_date="2026-04-15", first_frost_date="2026-10-15")
+    bed_id = _make_bed(width_ft=2, length_ft=2)
+    db.add_seed_variety(
+        "Tomato", "Cherokee Purple", "Solanaceae", spacing_in=8, frost_tolerance="tender",
+        days_to_maturity_min=60, days_to_maturity_max=70, color_hex="#ff0000",
+    )
+    variety_id = db.list_seed_varieties()[0]["id"]
+    _add_seed_lot(variety_id)
+
+    page.goto(f"{live_server_url}/beds/{bed_id}")
+    with page.expect_response(lambda r: "/frost-warning" in r.url):
+        _arm_seed_variety(page, variety_id)
+    with page.expect_response(lambda r: "/frost-warning" in r.url):
+        page.locator("#garden-date").fill("2026-04-01")
+
+    assert page.locator("#frost-warning").is_visible()
+
+
+def test_frost_warning_banner_stays_hidden_for_hardy_variety(page, live_server_url):
+    db.update_farm_settings(last_frost_date="2026-04-15", first_frost_date="2026-10-15")
+    bed_id = _make_bed(width_ft=2, length_ft=2)
+    db.add_seed_variety(
+        "Kale", "Winterbor", "Brassicaceae", spacing_in=8, frost_tolerance="hardy",
+        days_to_maturity_min=60, days_to_maturity_max=70, color_hex="#00ff00",
+    )
+    variety_id = db.list_seed_varieties()[0]["id"]
+    _add_seed_lot(variety_id)
+
+    page.goto(f"{live_server_url}/beds/{bed_id}")
+    with page.expect_response(lambda r: "/frost-warning" in r.url):
+        _arm_seed_variety(page, variety_id)
+    with page.expect_response(lambda r: "/frost-warning" in r.url):
+        page.locator("#garden-date").fill("2026-04-01")
+
+    assert not page.locator("#frost-warning").is_visible()
+
+
 def test_shade_warning_marker_appears_without_manually_setting_planted_date(page, live_server_url):
     "Regression test: the shared #garden-date field (doubling as shade-as-of date and batch planted_date) defaults to today, so fetch_shade_warnings should fire on arming a variety without the gardener manually touching the date field."
     plot_id, bed_id = _make_bed_with_plot(width_ft=2, length_ft=2)  # 24in x 24in

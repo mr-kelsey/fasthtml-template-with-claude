@@ -25,6 +25,7 @@ EVENT_TYPE_COLORS = {
     "germination-check": "#4caf50",
     "harvest": "#ff9800",
     "product-reminder": "#00897b",
+    "frost-cover": "#e53935",
     "custom": "#999999",
 }
 
@@ -51,13 +52,15 @@ def _parse_int_or(value, default):
 
 def _event_bar(event):
     color = EVENT_TYPE_COLORS.get(event["event_type"], "#999999")
-    return fast.Div(cls="event-bar", style=f"background-color: {color}", title=event["title"])
+    cls = "event-bar critical" if event["is_critical"] else "event-bar"
+    return fast.Div(cls=cls, style=f"background-color: {color}", title=event["title"])
 
 
 def _farm_day_square(day_date, in_current_month, is_today, events_for_day, year, month):
     badges = [fast.Div(*[_event_bar(event) for event in events_for_day], cls="event-bars")]
     day_url = _farm_calendar_url(year, month, base=f"/farm-calendar/day/{day_date.isoformat()}")
-    return day_square(day_date, in_current_month, is_today, badges, day_url)
+    critical = any(event["is_critical"] for event in events_for_day)
+    return day_square(day_date, in_current_month, is_today, badges, day_url, critical=critical)
 
 
 def _calendar_grid(weeks, month, events_map, today, year):

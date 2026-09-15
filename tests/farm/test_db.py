@@ -66,6 +66,18 @@ def test_add_seed_variety_persists_sun_needs():
     assert db.list_seed_varieties()[0]["sun_needs"] == "full_sun"
 
 
+def test_add_seed_variety_persists_frost_tolerance():
+    db.add_seed_variety("Tomato", "Cherokee Purple", "Solanaceae", frost_tolerance="tender")
+    assert db.list_seed_varieties()[0]["frost_tolerance"] == "tender"
+
+
+def test_update_seed_variety_changes_frost_tolerance():
+    db.add_seed_variety("Kale", "Winterbor", "Brassicaceae", frost_tolerance="tender")
+    variety_id = db.list_seed_varieties()[0]["id"]
+    db.update_seed_variety(variety_id, "Kale", "Winterbor", "Brassicaceae", frost_tolerance="hardy")
+    assert db.get_seed_variety(variety_id)["frost_tolerance"] == "hardy"
+
+
 def test_seed_varieties_ordered_by_common_name_then_name():
     db.add_seed_variety("Zucchini", "Black Beauty", "Cucurbitaceae")
     db.add_seed_variety("Basil", "Genovese", "Lamiaceae")
@@ -701,6 +713,67 @@ def test_manual_farm_event_has_no_linked_variety_or_bed():
     db.add_farm_event("custom", "Check frost cloth", "2026-03-01", "2026-03-01")
     event = db.list_farm_events_in_range(*ALL_TIME)[0]
     assert (event["variety_name"], event["bed_label"]) == (None, None)
+
+
+def test_get_farm_settings_defaults_to_none_when_unset():
+    assert db.get_farm_settings() == {"last_frost_date": None, "first_frost_date": None}
+
+
+def test_update_farm_settings_persists_frost_dates():
+    db.update_farm_settings(last_frost_date="2026-04-15", first_frost_date="2026-10-15")
+    assert db.get_farm_settings() == {"last_frost_date": "2026-04-15", "first_frost_date": "2026-10-15"}
+
+
+def test_update_farm_settings_overwrites_existing_row():
+    db.update_farm_settings(last_frost_date="2026-04-15", first_frost_date="2026-10-15")
+    db.update_farm_settings(last_frost_date="2026-05-01", first_frost_date="2026-10-01")
+    assert db.get_farm_settings() == {"last_frost_date": "2026-05-01", "first_frost_date": "2026-10-01"}
+
+
+def test_planting_before_last_frost_generates_one_frost_cover_event():
+    db.update_farm_settings(last_frost_date="2026-04-15", first_frost_date="2026-10-15")
+    variety_id = _add_variety(days_to_maturity_min=60, days_to_maturity_max=70, frost_tolerance="tender")
+    db.add_planting(variety_id, "2026-04-01")
+    frost_events = [e for e in db.list_farm_events_in_range(*ALL_TIME) if e["event_type"] == "frost-cover"]
+    assert len(frost_events) == 1
+
+
+def test_frost_cover_event_is_flagged_critical():
+    db.update_farm_settings(last_frost_date="2026-04-15", first_frost_date="2026-10-15")
+    variety_id = _add_variety(days_to_maturity_min=60, days_to_maturity_max=70, frost_tolerance="tender")
+    db.add_planting(variety_id, "2026-04-01")
+    frost_event = [e for e in db.list_farm_events_in_range(*ALL_TIME) if e["event_type"] == "frost-cover"][0]
+    assert frost_event["is_critical"] == 1
+
+
+def test_frost_cover_event_spans_the_planted_date_to_last_frost_date():
+    db.update_farm_settings(last_frost_date="2026-04-15", first_frost_date="2026-10-15")
+    variety_id = _add_variety(days_to_maturity_min=60, days_to_maturity_max=70, frost_tolerance="tender")
+    db.add_planting(variety_id, "2026-04-01")
+    frost_event = [e for e in db.list_farm_events_in_range(*ALL_TIME) if e["event_type"] == "frost-cover"][0]
+    assert (frost_event["start_date"], frost_event["end_date"]) == ("2026-04-01", "2026-04-15")
+
+
+def test_hardy_variety_does_not_generate_frost_cover_event():
+    db.update_farm_settings(last_frost_date="2026-04-15", first_frost_date="2026-10-15")
+    variety_id = _add_variety(days_to_maturity_min=60, days_to_maturity_max=70, frost_tolerance="hardy")
+    db.add_planting(variety_id, "2026-04-01")
+    assert [e["event_type"] for e in db.list_farm_events_in_range(*ALL_TIME)] == ["harvest"]
+
+
+def test_no_frost_cover_event_when_farm_settings_unset():
+    variety_id = _add_variety(days_to_maturity_min=60, days_to_maturity_max=70, frost_tolerance="tender")
+    db.add_planting(variety_id, "2026-04-01")
+    assert [e["event_type"] for e in db.list_farm_events_in_range(*ALL_TIME)] == ["harvest"]
+
+
+def test_updating_planting_date_regenerates_rather_than_duplicates_frost_cover_event():
+    db.update_farm_settings(last_frost_date="2026-04-15", first_frost_date="2026-10-15")
+    variety_id = _add_variety(days_to_maturity_min=60, days_to_maturity_max=70, frost_tolerance="tender")
+    planting_id = db.add_planting(variety_id, "2026-04-01")
+    db.update_planting(planting_id, variety_id, "2026-04-02")
+    frost_events = [e for e in db.list_farm_events_in_range(*ALL_TIME) if e["event_type"] == "frost-cover"]
+    assert len(frost_events) == 1
 
 
 def test_add_planting_without_bed_generates_germination_and_harvest_events():

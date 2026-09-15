@@ -8,12 +8,14 @@ from farm.helpers import (
     parse_agronomic_fields,
     parse_soil_feeding_fields,
     validate_sun_needs,
+    validate_frost_tolerance,
     validate_relation,
     format_day_range,
     format_npk,
     next_palette_color,
     variety_photo_img,
     SUN_NEEDS_OPTIONS,
+    FROST_TOLERANCE_OPTIONS,
     RELATION_OPTIONS,
 )
 import db
@@ -115,6 +117,19 @@ def _agronomic_form_fields(variety=None):
                 for sun_needs in SUN_NEEDS_OPTIONS
             ],
             name="sun_needs",
+        ),
+        fast.Select(
+            fast.Option(
+                "Frost tolerance (optional)", value="", selected=_optional_value(variety, "frost_tolerance") == ""
+            ),
+            *[
+                fast.Option(
+                    frost_tolerance, value=frost_tolerance,
+                    selected=_optional_value(variety, "frost_tolerance") == frost_tolerance,
+                )
+                for frost_tolerance in FROST_TOLERANCE_OPTIONS
+            ],
+            name="frost_tolerance",
         ),
         fast.Input(
             name="water_needs", placeholder="Water needs (optional)", value=_optional_value(variety, "water_needs")
@@ -219,6 +234,7 @@ def _variety_row(variety):
         fast.Td(format_day_range(variety["days_to_maturity_min"], variety["days_to_maturity_max"])),
         fast.Td(variety["spacing_in"] if variety["spacing_in"] is not None else ""),
         fast.Td(variety["sun_needs"] or ""),
+        fast.Td(variety["frost_tolerance"] or ""),
         fast.Td(variety["water_needs"] or ""),
         fast.Td(variety["soil_type"] or ""),
         fast.Td(variety["soil_ph_min"] if variety["soil_ph_min"] is not None else ""),
@@ -286,7 +302,7 @@ def list_seed_varieties_page():
     varieties = db.list_seed_varieties()
     headers = [
         "Variety", "Family", "Genus", "Species",
-        "Germination (days)", "Maturity (days)", "Spacing (in)", "Sun", "Water",
+        "Germination (days)", "Maturity (days)", "Spacing (in)", "Sun", "Frost", "Water",
         "Soil", "pH Min", "pH Max", "Feed Freq (days)", "Growth N-P-K", "Produce N-P-K", "",
     ]
     rows = (
@@ -346,9 +362,9 @@ def _validate_required_fields(common_name, name, plant_family):
 
 
 def _validate_soil_feeding_and_sun(
-    soil_type, soil_ph_min, soil_ph_max, feeding_frequency_days, growth_npk, produce_npk, sun_needs
+    soil_type, soil_ph_min, soil_ph_max, feeding_frequency_days, growth_npk, produce_npk, sun_needs, frost_tolerance
 ):
-    "Returns (soil_feeding_fields_dict, sun_needs_value_or_none) or an error fast.Response."
+    "Returns (soil_feeding_fields_dict, sun_needs_value_or_none, frost_tolerance_value_or_none) or an error fast.Response."
     soil_feeding_fields, error = parse_soil_feeding_fields(
         soil_type, soil_ph_min, soil_ph_max, feeding_frequency_days, growth_npk, produce_npk
     )
@@ -357,7 +373,10 @@ def _validate_soil_feeding_and_sun(
     sun_needs_value, error = validate_sun_needs(sun_needs)
     if error:
         return fast.Response(error, status_code=422)
-    return soil_feeding_fields, sun_needs_value
+    frost_tolerance_value, error = validate_frost_tolerance(frost_tolerance)
+    if error:
+        return fast.Response(error, status_code=422)
+    return soil_feeding_fields, sun_needs_value, frost_tolerance_value
 
 
 @router("/seed-varieties", methods=["post"])
@@ -373,6 +392,7 @@ def add_seed_variety_route(
     days_to_maturity_max: str = "",
     spacing_in: str = "",
     sun_needs: str = "",
+    frost_tolerance: str = "",
     water_needs: str = "",
     soil_type: str = "",
     soil_ph_min: str = "",
@@ -394,11 +414,12 @@ def add_seed_variety_route(
     if error:
         return fast.Response(error, status_code=422)
     validated_soil = _validate_soil_feeding_and_sun(
-        soil_type, soil_ph_min, soil_ph_max, feeding_frequency_days, growth_npk, produce_npk, sun_needs
+        soil_type, soil_ph_min, soil_ph_max, feeding_frequency_days, growth_npk, produce_npk, sun_needs,
+        frost_tolerance,
     )
     if isinstance(validated_soil, fast.Response):
         return validated_soil
-    soil_feeding_fields, sun_needs_value = validated_soil
+    soil_feeding_fields, sun_needs_value, frost_tolerance_value = validated_soil
     photo_path, error = _save_uploaded_photo(photo)
     if error:
         return fast.Response(error, status_code=422)
@@ -411,6 +432,7 @@ def add_seed_variety_route(
         genus=genus.strip() or None,
         species=species.strip() or None,
         sun_needs=sun_needs_value,
+        frost_tolerance=frost_tolerance_value,
         water_needs=water_needs.strip() or None,
         color_hex=color_hex.strip() or None,
         photo_path=photo_path,
@@ -462,6 +484,7 @@ def update_seed_variety_route(
     days_to_maturity_max: str = "",
     spacing_in: str = "",
     sun_needs: str = "",
+    frost_tolerance: str = "",
     water_needs: str = "",
     soil_type: str = "",
     soil_ph_min: str = "",
@@ -483,11 +506,12 @@ def update_seed_variety_route(
     if error:
         return fast.Response(error, status_code=422)
     validated_soil = _validate_soil_feeding_and_sun(
-        soil_type, soil_ph_min, soil_ph_max, feeding_frequency_days, growth_npk, produce_npk, sun_needs
+        soil_type, soil_ph_min, soil_ph_max, feeding_frequency_days, growth_npk, produce_npk, sun_needs,
+        frost_tolerance,
     )
     if isinstance(validated_soil, fast.Response):
         return validated_soil
-    soil_feeding_fields, sun_needs_value = validated_soil
+    soil_feeding_fields, sun_needs_value, frost_tolerance_value = validated_soil
     existing = db.get_seed_variety(variety_id)
     existing_photo_path = existing["photo_path"] if existing else None
     new_photo_path, error = _save_uploaded_photo(photo)
@@ -509,6 +533,7 @@ def update_seed_variety_route(
         genus=genus.strip() or None,
         species=species.strip() or None,
         sun_needs=sun_needs_value,
+        frost_tolerance=frost_tolerance_value,
         water_needs=water_needs.strip() or None,
         color_hex=color_hex.strip() or None,
         photo_path=photo_path,

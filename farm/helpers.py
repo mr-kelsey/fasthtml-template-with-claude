@@ -25,6 +25,12 @@ NPK_FIELD_LABELS = {
 
 SUN_NEEDS_OPTIONS = ["full_sun", "partial_shade", "full_shade"]
 
+FROST_TOLERANCE_OPTIONS = ["tender", "half_hardy", "hardy"]
+
+# hardy (and unset) never warns -- it's bred to handle frost. half_hardy tolerates frost within
+# this many days of the given last-spring/first-fall date; tender tolerates none.
+_FROST_TOLERANCE_BUFFER_DAYS = {"tender": 0, "half_hardy": 14}
+
 RELATION_OPTIONS = ["companion", "antagonist"]
 
 SEASON_OPTIONS = ["summer_solstice", "winter_solstice"]
@@ -192,6 +198,15 @@ def validate_sun_needs(value: str):
     return value, None
 
 
+def validate_frost_tolerance(value: str):
+    "Returns (value_or_none, None) or (None, error_message) if value is non-blank but not in FROST_TOLERANCE_OPTIONS."
+    if value is None or value.strip() == "":
+        return None, None
+    if value not in FROST_TOLERANCE_OPTIONS:
+        return None, f"Frost tolerance must be one of: {', '.join(FROST_TOLERANCE_OPTIONS)}."
+    return value, None
+
+
 def validate_relation(value: str):
     "Returns (value, None) or (None, error_message). Unlike sun_needs, relation is required -- blank is an error."
     if value is None or value.strip() == "":
@@ -221,6 +236,39 @@ def compute_window(planted_date: str, days_min: int, days_max: int):
         return None
     planted = date.fromisoformat(planted_date)
     return planted + timedelta(days=days_min), planted + timedelta(days=days_max)
+
+
+def _resolve_annual_date(recurring_date: str, year: int):
+    "recurring_date is an ISO date string whose year is a placeholder -- only month/day are read."
+    parsed = date.fromisoformat(recurring_date)
+    return date(year, parsed.month, parsed.day)
+
+
+def frost_risk_windows(planted_date, maturity_end_date, frost_tolerance, last_frost_date, first_frost_date):
+    """Sub-windows of [planted_date, maturity_end_date] where frost_tolerance can't handle the given
+    last-spring/first-fall frost dates -- 0, 1 (spring- or fall-only), or 2 (a long-season planting
+    spanning both) windows. Empty when frost_tolerance is unset/'hardy', or either frost date is
+    unset (nothing to check against). last_frost_date/first_frost_date are recurring (month/day only,
+    year ignored) -- resolved onto planted_date's year. This is the single seam a future
+    weather-driven forecast would replace: same signature, real per-day risk instead of a static
+    average date -- see the farm calendar's frost-cover event generation (a one-time snapshot, fine
+    since it's a physical reminder to go cover a crop) vs. the all-plantings page's live indicator
+    (recomputed every render, so it improves the moment better data is available)."""
+    if frost_tolerance not in _FROST_TOLERANCE_BUFFER_DAYS or last_frost_date is None or first_frost_date is None:
+        return []
+    buffer_days = timedelta(days=_FROST_TOLERANCE_BUFFER_DAYS[frost_tolerance])
+    safe_start = _resolve_annual_date(last_frost_date, planted_date.year) - buffer_days
+    safe_end = _resolve_annual_date(first_frost_date, planted_date.year) + buffer_days
+    windows = []
+    if planted_date < safe_start:
+        windows.append((planted_date, min(maturity_end_date, safe_start)))
+    if maturity_end_date > safe_end:
+        windows.append((max(planted_date, safe_end), maturity_end_date))
+    return windows
+
+
+def frost_exceeds_tolerance(planted_date, maturity_end_date, frost_tolerance, last_frost_date, first_frost_date):
+    return bool(frost_risk_windows(planted_date, maturity_end_date, frost_tolerance, last_frost_date, first_frost_date))
 
 
 def format_day_range(days_min: int, days_max: int):

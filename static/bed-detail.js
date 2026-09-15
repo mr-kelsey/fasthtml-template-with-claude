@@ -30,6 +30,7 @@
     var lot_quantity_input = document.getElementById("armed-lot-quantity-input");
     var quantity_per_point_wrap = document.getElementById("batch-quantity-per-point-wrap");
     var rotation_warning_el = document.getElementById("rotation-warning");
+    var frost_warning_el = document.getElementById("frost-warning");
     var grid_offset_controls = document.getElementById("grid-offset-controls");
     var zoom_controls = document.getElementById("zoom-controls");
     var zoom_display = document.getElementById("zoom-level-display");
@@ -411,6 +412,30 @@
             });
     }
 
+    function fetch_frost_warning() {
+        if (!frost_warning_el) return;
+        if (!state.armed_variety || !garden_date_input || !garden_date_input.value) {
+            frost_warning_el.hidden = true;
+            return;
+        }
+        post("/beds/" + data.bed_id + "/frost-warning", {
+            variety_id: String(state.armed_variety.id),
+            planted_date: garden_date_input.value,
+        })
+            .then(function (response) {
+                return response.ok ? response.json() : null;
+            })
+            .then(function (result) {
+                if (!result || !result.at_risk) {
+                    frost_warning_el.hidden = true;
+                    return;
+                }
+                frost_warning_el.textContent =
+                    "This variety may not tolerate frost at this planting date -- check the farm calendar for a cover-crop reminder.";
+                frost_warning_el.hidden = false;
+            });
+    }
+
     function render_lattice() {
         clear_children(lattice_layer);
         clear_children(staged_layer);
@@ -449,6 +474,7 @@
         update_batch_form();
         fetch_shade_warnings();
         fetch_rotation_warning();
+        fetch_frost_warning();
     }
 
     function highlight_armed_button(variety_id, mode) {
