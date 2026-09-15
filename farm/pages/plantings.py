@@ -15,6 +15,7 @@ from farm.helpers import (
     validate_quantity_germinated,
     validate_non_negative,
     variety_photo_img,
+    rotation_conflict,
 )
 import db
 
@@ -765,6 +766,22 @@ def _zoom_controls():
     )
 
 
+def _rotation_history_section(plantings):
+    "Advisory-only rotation-by-plant-family history for this bed -- see rotation_conflict for the live arm-time warning."
+    if not plantings:
+        return ""
+    rows = sorted(plantings, key=lambda p: p["planted_date"], reverse=True)
+    return fast.Div(
+        fast.H3("Rotation history"),
+        fast.Ul(
+            *[
+                fast.Li(f"{p['planted_date']} — {p['plant_family']} ({p['common_name']} – {p['variety_name']})")
+                for p in rows
+            ]
+        ),
+    )
+
+
 @router("/beds/{bed_id}", methods=["get"])
 def bed_detail_page(bed_id: int, on_date: str = None):
     bed = db.get_bed(bed_id)
@@ -837,9 +854,11 @@ def bed_detail_page(bed_id: int, on_date: str = None):
         garden_date_picker,
         _grid_offset_controls(),
         _zoom_controls(),
+        fast.Div(id="rotation-warning", hidden=True),
         fast.Script(json.dumps(data), type="application/json", id="bed-detail-data"),
         fast.Div(fast.Div(canvas, id="bed-canvas-wrap", cls="bed-detail-canvas-wrap"), palette, cls="bed-detail-layout"),
         _batch_plant_form(bed_id),
+        _rotation_history_section(plantings),
         fast.Dialog(fast.Div(id="bed-dialog-body"), id="bed-dialog"),
         fast.Script(src="/bed-detail.js"),
     )
@@ -1003,6 +1022,31 @@ def bed_shade_warnings_route(bed_id: int, variety_id: str, planted_date: str, po
         return fast.Response(error, status_code=422)
     warnings = _shade_warnings_for_points(bed, variety, planted_date, parsed_points)
     return fast.Response(json.dumps({"warnings": warnings}), media_type="application/json")
+
+
+@router("/beds/{bed_id}/rotation-warning", methods=["post"])
+def bed_rotation_warning_route(bed_id: int, variety_id: str, planted_date: str):
+    """Advisory only, decoration like /shade-warnings above -- never blocks planting. Returns
+    {'conflict': bool, 'detail': {'common_name', 'name', 'planted_date'} | None}."""
+    bed = db.get_bed(bed_id)
+    if bed is None:
+        return fast.Response("Bed not found.", status_code=404)
+    validated_variety_id = _validate_variety_id(variety_id)
+    if isinstance(validated_variety_id, fast.Response):
+        return validated_variety_id
+    variety = db.get_seed_variety(validated_variety_id)
+    if _parse_date_or_none(planted_date) is None:
+        return fast.Response("Invalid planted date.", status_code=422)
+    conflict = rotation_conflict(db.list_plantings_for_bed(bed_id), variety["plant_family"], planted_date)
+    detail = (
+        {
+            "common_name": conflict["common_name"], "name": conflict["variety_name"],
+            "planted_date": conflict["planted_date"],
+        }
+        if conflict
+        else None
+    )
+    return fast.Response(json.dumps({"conflict": conflict is not None, "detail": detail}), media_type="application/json")
 
 
 @router("/beds/{bed_id}/grid-offset", methods=["post"])

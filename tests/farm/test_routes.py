@@ -2491,6 +2491,40 @@ def test_bed_shade_warnings_true_when_bed_fully_shaded_for_a_full_sun_variety(cl
     assert response.json()["warnings"] == [True]
 
 
+def test_bed_rotation_warning_returns_404_when_bed_not_found(client):
+    variety_id = _create_variety(client)
+    response = client.post(
+        "/beds/999999/rotation-warning",
+        data={"variety_id": str(variety_id), "planted_date": "2026-06-01"},
+    )
+    assert response.status_code == 404
+
+
+def test_bed_rotation_warning_false_with_no_planting_history(client):
+    plot_id = _create_plot(client)
+    bed_id = _create_bed(client, plot_id)
+    variety_id = _create_variety(client)
+    response = client.post(
+        f"/beds/{bed_id}/rotation-warning",
+        data={"variety_id": str(variety_id), "planted_date": "2026-06-01"},
+    )
+    assert response.json()["conflict"] is False
+
+
+def test_bed_rotation_warning_true_when_same_family_planted_recently_in_that_bed(client):
+    plot_id = _create_plot(client)
+    bed_id = _create_bed(client, plot_id)
+    variety_id = _create_variety(client, plant_family="Solanaceae")
+    db.add_planting(variety_id, "2025-05-01", bed_id=bed_id, x_in=0, y_in=0)
+    response = client.post(
+        f"/beds/{bed_id}/rotation-warning",
+        data={"variety_id": str(variety_id), "planted_date": "2026-06-01"},
+    )
+    body = response.json()
+    assert body["conflict"] is True
+    assert body["detail"]["planted_date"] == "2025-05-01"
+
+
 def test_batch_plant_marks_shade_warning_true_when_full_sun_variety_planted_in_full_shade(client):
     plot_id = _create_plot(client)
     bed_id = _create_bed(client, plot_id)

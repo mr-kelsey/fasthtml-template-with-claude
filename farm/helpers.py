@@ -236,6 +236,23 @@ def format_day_range(days_min: int, days_max: int):
     return f"{days_min}-{days_max}"
 
 
+def rotation_conflict(plantings, plant_family, new_planted_date: str, lookback_years=2):
+    """Most recent past planting in `plantings` (dicts with plant_family/planted_date) sharing plant_family,
+    planted within lookback_years of new_planted_date. None if no such planting exists. Pure function over
+    plain dicts -- no db access, testable standalone, same philosophy as farm/geometry.py's pure functions.
+    Advisory only: rotation timing is a best-practice guideline, not a physical constraint, so callers must
+    never use this to block planting -- only to warn."""
+    new_year = date.fromisoformat(new_planted_date).year
+    matches = [
+        p
+        for p in plantings
+        if p["plant_family"] == plant_family and 0 <= new_year - date.fromisoformat(p["planted_date"]).year <= lookback_years
+    ]
+    if not matches:
+        return None
+    return max(matches, key=lambda p: p["planted_date"])
+
+
 def variety_photo_img(variety, cls="variety-photo-thumb"):
     "Img for the variety's reference photo (served from db.UPLOADS_DIR via /uploads/), or None if it has none."
     if variety is None or not variety["photo_path"]:

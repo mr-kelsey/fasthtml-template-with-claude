@@ -965,6 +965,13 @@ def test_list_plantings_for_bed_includes_inch_position():
     assert (planting["x_in"], planting["y_in"]) == (24, 36)
 
 
+def test_list_plantings_for_bed_includes_plant_family():
+    variety_id = _add_variety(plant_family="Fabaceae")
+    bed_id = _add_bed()
+    db.add_planting(variety_id, "2026-05-01", bed_id=bed_id, x_in=0, y_in=0)
+    assert db.list_plantings_for_bed(bed_id)[0]["plant_family"] == "Fabaceae"
+
+
 def test_list_plantings_for_bed_excludes_plantings_in_other_beds():
     variety_id = _add_variety()
     db.add_land_plot("Plot A", 40, 60)

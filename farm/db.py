@@ -648,7 +648,7 @@ class FarmDatabaseMixin:
                     "SELECT p.id, p.variety_id, p.bed_id, p.planted_date, p.quantity, "
                     "p.quantity_germinated, p.notes, p.x_in, p.y_in, p.seed_lot_id, "
                     "p.transplant_lot_id, p.source_type, p.soil_temp_f, p.created_at, "
-                    "sv.name AS variety_name, sv.common_name, sv.color_hex, sv.spacing_in, "
+                    "sv.name AS variety_name, sv.common_name, sv.plant_family, sv.color_hex, sv.spacing_in, "
                     "sv.germination_days_min, sv.germination_days_max, "
                     "sv.days_to_maturity_min, sv.days_to_maturity_max "
                     "FROM plantings p "

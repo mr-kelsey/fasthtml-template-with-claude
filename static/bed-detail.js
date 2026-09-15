@@ -29,6 +29,7 @@
     var lot_quantity_wrap = document.getElementById("armed-lot-quantity-wrap");
     var lot_quantity_input = document.getElementById("armed-lot-quantity-input");
     var quantity_per_point_wrap = document.getElementById("batch-quantity-per-point-wrap");
+    var rotation_warning_el = document.getElementById("rotation-warning");
     var grid_offset_controls = document.getElementById("grid-offset-controls");
     var zoom_controls = document.getElementById("zoom-controls");
     var zoom_display = document.getElementById("zoom-level-display");
@@ -385,6 +386,31 @@
             });
     }
 
+    function fetch_rotation_warning() {
+        if (!rotation_warning_el) return;
+        if (!state.armed_variety || !garden_date_input || !garden_date_input.value) {
+            rotation_warning_el.hidden = true;
+            return;
+        }
+        post("/beds/" + data.bed_id + "/rotation-warning", {
+            variety_id: String(state.armed_variety.id),
+            planted_date: garden_date_input.value,
+        })
+            .then(function (response) {
+                return response.ok ? response.json() : null;
+            })
+            .then(function (result) {
+                if (!result || !result.conflict) {
+                    rotation_warning_el.hidden = true;
+                    return;
+                }
+                var detail = result.detail;
+                rotation_warning_el.textContent =
+                    "Same plant family grown here " + detail.planted_date + " (" + detail.common_name + " – " + detail.name + "). Rotation is advisory only.";
+                rotation_warning_el.hidden = false;
+            });
+    }
+
     function render_lattice() {
         clear_children(lattice_layer);
         clear_children(staged_layer);
@@ -422,6 +448,7 @@
         update_companion_tints();
         update_batch_form();
         fetch_shade_warnings();
+        fetch_rotation_warning();
     }
 
     function highlight_armed_button(variety_id, mode) {

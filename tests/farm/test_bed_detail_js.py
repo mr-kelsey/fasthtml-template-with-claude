@@ -415,6 +415,36 @@ def test_shade_warning_marker_appears_for_a_full_sun_variety_in_full_shade(page,
     assert "shade-warning" in warned.get_attribute("class")
 
 
+def test_rotation_warning_banner_appears_when_same_family_planted_recently_in_that_bed(page, live_server_url):
+    bed_id = _make_bed(width_ft=2, length_ft=2)
+    recent_planted_date = (date.today() - timedelta(days=200)).isoformat()
+    db.add_seed_variety("Tomato", "Roma", "Solanaceae", spacing_in=8, color_hex="#ff0000")
+    earlier_variety_id = db.list_seed_varieties()[0]["id"]
+    db.add_planting(earlier_variety_id, recent_planted_date, bed_id=bed_id, x_in=0, y_in=0)
+    variety_id = _make_variety()
+    _add_seed_lot(variety_id)
+
+    page.goto(f"{live_server_url}/beds/{bed_id}")
+    with page.expect_response(lambda r: "/rotation-warning" in r.url):
+        _arm_seed_variety(page, variety_id)
+
+    banner = page.locator("#rotation-warning")
+    assert banner.is_visible()
+    assert recent_planted_date in banner.text_content()
+
+
+def test_rotation_warning_banner_stays_hidden_with_no_matching_family_history(page, live_server_url):
+    bed_id = _make_bed(width_ft=2, length_ft=2)
+    variety_id = _make_variety()
+    _add_seed_lot(variety_id)
+
+    page.goto(f"{live_server_url}/beds/{bed_id}")
+    with page.expect_response(lambda r: "/rotation-warning" in r.url):
+        _arm_seed_variety(page, variety_id)
+
+    assert not page.locator("#rotation-warning").is_visible()
+
+
 def test_shade_warning_marker_appears_without_manually_setting_planted_date(page, live_server_url):
     "Regression test: the shared #garden-date field (doubling as shade-as-of date and batch planted_date) defaults to today, so fetch_shade_warnings should fire on arming a variety without the gardener manually touching the date field."
     plot_id, bed_id = _make_bed_with_plot(width_ft=2, length_ft=2)  # 24in x 24in
