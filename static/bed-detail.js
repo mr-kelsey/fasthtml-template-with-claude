@@ -153,6 +153,47 @@
         return circle;
     }
 
+    // Mirrors farm/pages/plantings.py's _planting_label_font_size_in.
+    var LABEL_FONT_RATIO = 0.9;
+    var LABEL_FONT_MIN_IN = 1.2;
+    var LABEL_FONT_MAX_IN = 4;
+    var LABEL_CHAR_WIDTH_RATIO = 0.6;
+
+    function label_font_size_in(radius_in, label) {
+        var by_radius = radius_in * LABEL_FONT_RATIO;
+        var by_width = (radius_in * 1.8) / (Math.max(label.length, 1) * LABEL_CHAR_WIDTH_RATIO);
+        var font_size = Math.min(LABEL_FONT_MAX_IN, by_radius, by_width);
+        return font_size >= LABEL_FONT_MIN_IN ? font_size : null;
+    }
+
+    function make_planting_label(x_in, y_in, radius_in, planting_id) {
+        var label = String(planting_id);
+        var text = document.createElementNS(SVG_NS, "text");
+        text.setAttribute("x", x_in);
+        text.setAttribute("y", y_in);
+        text.setAttribute("text-anchor", "middle");
+        text.setAttribute("dominant-baseline", "middle");
+        text.setAttribute("class", "planting-dot-label");
+        text.setAttribute("pointer-events", "none");
+        text.setAttribute("data-planting-id", label);
+        var font_size = label_font_size_in(radius_in, label);
+        text.setAttribute("font-size", font_size || LABEL_FONT_MIN_IN);
+        if (font_size === null) text.style.display = "none";
+        text.textContent = label;
+        return text;
+    }
+
+    function sort_plantings_for_z_order(plantings) {
+        // Largest-spacing plants paint first (bottom), smallest paint last (top); ties broken by
+        // id for a stable order. Mirrors farm/pages/plantings.py's _sort_plantings_for_z_order.
+        return plantings.slice().sort(function (a, b) {
+            var ra = a.spacing_in || DEFAULT_SPACING_IN;
+            var rb = b.spacing_in || DEFAULT_SPACING_IN;
+            if (rb !== ra) return rb - ra;
+            return a.id - b.id;
+        });
+    }
+
     function toggle_point(point) {
         var index = -1;
         for (var i = 0; i < state.staged_points.length; i++) {
@@ -262,16 +303,30 @@
     }
 
     function render_planted_layer() {
-        // Rebuilds #planted-layer from data.plantings -- mirrors the server-side _planting_dot markup
-        // (radius is half the variety's spacing_in, same convention _dot_radius_in uses).
+        // Rebuilds #planted-layer from data.plantings -- mirrors the server-side _planting_dot_elements
+        // markup (radius is half the variety's spacing_in, same convention _dot_radius_in uses).
         clear_children(planted_layer);
-        data.plantings.forEach(function (p) {
+        var ordered = sort_plantings_for_z_order(data.plantings);
+        if (state.armed_variety) {
+            // Arming a variety brings all of its already-stamped dots to the top, overriding the
+            // default size-based order -- appending last in SVG paint order means on top.
+            var armed_id = state.armed_variety.id;
+            var others = ordered.filter(function (p) {
+                return p.variety_id !== armed_id;
+            });
+            var armed = ordered.filter(function (p) {
+                return p.variety_id === armed_id;
+            });
+            ordered = others.concat(armed);
+        }
+        ordered.forEach(function (p) {
             var radius_in = (p.spacing_in || DEFAULT_SPACING_IN) / 2;
             var dot = make_circle(p.x_in, p.y_in, radius_in, "planting-dot", p.color_hex);
             dot.setAttribute("data-planting-id", p.id);
             dot.setAttribute("data-variety-id", p.variety_id);
             dot.setAttribute("data-common-name", p.common_name || "");
             planted_layer.appendChild(dot);
+            planted_layer.appendChild(make_planting_label(p.x_in, p.y_in, radius_in, p.id));
         });
     }
 
@@ -396,6 +451,7 @@
             if (lots.length === 1) state.armed_lot_id = lots[0].id;
         }
         highlight_armed_button(variety_id, mode);
+        render_planted_layer();
         render_lattice();
     }
 
@@ -407,6 +463,7 @@
         if (palette_seed) palette_seed.hidden = mode !== "seed";
         if (palette_transplant) palette_transplant.hidden = mode !== "transplant";
         highlight_armed_button(null, mode);
+        render_planted_layer();
         render_lattice();
     }
 

@@ -317,6 +317,17 @@ dialog#bed-dialog {
     stroke-opacity: 0.7;
 }
 
+.planting-dot-label {
+    /* White fill with a thin dark outline stays legible regardless of the dot's own color_hex,
+       which is arbitrary per-variety and can't be relied on to contrast with a fixed fill. */
+    fill: #fff;
+    stroke: #000;
+    stroke-width: 0.15;
+    paint-order: stroke;
+    pointer-events: none;
+    user-select: none;
+}
+
 .lattice-point {
     /* Outline only, not filled -- at tight spacing (e.g. 1in) adjacent lattice points'
        fixed-radius circles overlap so much that a solid fill leaves no visible gaps at

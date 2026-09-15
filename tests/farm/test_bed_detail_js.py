@@ -223,6 +223,54 @@ def test_antagonist_relation_tints_an_occupied_point_red(page, live_server_url):
     assert "antagonist" in tomato_dot.get_attribute("class")
 
 
+def test_larger_spacing_plants_are_drawn_below_smaller_ones(page, live_server_url):
+    bed_id = _make_bed(width_ft=3, length_ft=3)
+    big_id = _make_variety(common_name="Squash", name="Zucchini", spacing_in=24, color_hex="#00ff00")
+    small_id = _make_variety(common_name="Radish", name="Cherry Belle", spacing_in=4, color_hex="#ff00ff")
+    # Small-spacing planting persisted (and thus given a lower id) first, so DOM/id order alone
+    # can't explain a spacing-based result.
+    db.add_planting(small_id, "2026-01-01", bed_id=bed_id, x_in=12, y_in=12)
+    db.add_planting(big_id, "2026-01-01", bed_id=bed_id, x_in=12, y_in=12)
+
+    page.goto(f"{live_server_url}/beds/{bed_id}")
+
+    order = page.locator("#planted-layer .planting-dot").evaluate_all(
+        "els => els.map(el => el.getAttribute('data-variety-id'))"
+    )
+    assert order == [str(big_id), str(small_id)]
+
+
+def test_planting_dot_is_labeled_with_its_planting_id(page, live_server_url):
+    bed_id = _make_bed()
+    variety_id = _make_variety(spacing_in=8)
+    db.add_planting(variety_id, "2026-01-01", bed_id=bed_id, x_in=8, y_in=8)
+    planting_id = db.list_plantings_for_bed(bed_id)[0]["id"]
+
+    page.goto(f"{live_server_url}/beds/{bed_id}")
+
+    label = page.locator(f'#planted-layer .planting-dot-label[data-planting-id="{planting_id}"]')
+    assert label.text_content() == str(planting_id)
+
+
+def test_arming_a_variety_brings_its_dots_to_the_top(page, live_server_url):
+    bed_id = _make_bed(width_ft=3, length_ft=3)
+    big_id = _make_variety(common_name="Squash", name="Zucchini", spacing_in=24, color_hex="#00ff00")
+    small_id = _make_variety(common_name="Radish", name="Cherry Belle", spacing_in=4, color_hex="#ff00ff")
+    _add_seed_lot(big_id)
+    db.add_planting(big_id, "2026-01-01", bed_id=bed_id, x_in=12, y_in=12)
+    db.add_planting(small_id, "2026-01-01", bed_id=bed_id, x_in=12, y_in=12)
+
+    page.goto(f"{live_server_url}/beds/{bed_id}")
+    # Left alone, the big (bottom-ranked) variety would stay under the small one -- arming it
+    # should override the size-based order and bring it to the top instead.
+    _arm_seed_variety(page, big_id)
+
+    order = page.locator("#planted-layer .planting-dot").evaluate_all(
+        "els => els.map(el => el.getAttribute('data-variety-id'))"
+    )
+    assert order == [str(small_id), str(big_id)]
+
+
 def _arm_transplant_with_lot(page, live_server_url, quantity_on_hand):
     bed_id = _make_bed(width_ft=2, length_ft=2)
     variety_id = _make_variety(spacing_in=8)

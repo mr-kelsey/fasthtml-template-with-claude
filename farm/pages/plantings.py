@@ -2,7 +2,7 @@ import json
 from datetime import date
 
 from fasthtml import common as fast
-from fasthtml.svg import Svg, Rect, Circle, G, Defs, Pattern, Path
+from fasthtml.svg import Svg, Rect, Circle, G, Defs, Pattern, Path, Text
 
 from farm import geometry
 from farm.layout import layout
@@ -573,14 +573,43 @@ def _dot_radius_in(spacing_in):
     return (spacing_in or DEFAULT_SPACING_IN) / 2
 
 
-def _planting_dot(planting):
-    "An already-persisted planting, rendered at its real inch position in the variety's color."
-    return Circle(
-        _dot_radius_in(planting["spacing_in"]), cx=planting["x_in"], cy=planting["y_in"],
+def _sort_plantings_for_z_order(plantings):
+    "Largest-spacing plants paint first (bottom), smallest paint last (top); ties broken by id for a stable order."
+    return sorted(plantings, key=lambda p: (-(p["spacing_in"] or DEFAULT_SPACING_IN), p["id"]))
+
+
+PLANTING_LABEL_FONT_RATIO = 0.9  # relative to the dot's radius
+PLANTING_LABEL_FONT_MIN_IN = 1.2  # below this the id isn't legible, so the label is hidden
+PLANTING_LABEL_FONT_MAX_IN = 4
+PLANTING_LABEL_CHAR_WIDTH_RATIO = 0.6  # approx glyph width as a fraction of font-size
+
+
+def _planting_label_font_size_in(radius_in, label):
+    "Returns None when no legible size fits the dot -- mirrors land_plots.py's _label_font_size."
+    by_radius = radius_in * PLANTING_LABEL_FONT_RATIO
+    by_width = (radius_in * 1.8) / (max(len(label), 1) * PLANTING_LABEL_CHAR_WIDTH_RATIO)
+    font_size = min(PLANTING_LABEL_FONT_MAX_IN, by_radius, by_width)
+    return round(font_size, 2) if font_size >= PLANTING_LABEL_FONT_MIN_IN else None
+
+
+def _planting_dot_elements(planting):
+    "An already-persisted planting's circle plus its planting-id label, in that paint order."
+    radius_in = _dot_radius_in(planting["spacing_in"])
+    circle = Circle(
+        radius_in, cx=planting["x_in"], cy=planting["y_in"],
         fill=planting["color_hex"] or "#888888",
         cls="planting-dot", data_planting_id=str(planting["id"]), data_variety_id=str(planting["variety_id"]),
         data_common_name=planting["common_name"] or "",
     )
+    label = str(planting["id"])
+    font_size = _planting_label_font_size_in(radius_in, label)
+    text = Text(
+        label, x=planting["x_in"], y=planting["y_in"], text_anchor="middle", dominant_baseline="middle",
+        cls="planting-dot-label", font_size=font_size or PLANTING_LABEL_FONT_MIN_IN,
+        pointer_events="none", data_planting_id=str(planting["id"]),
+        style="display:none" if font_size is None else None,
+    )
+    return circle, text
 
 
 def _canvas_margin_in(plantings, seed_stock_varieties, transplant_stock_varieties):
@@ -612,7 +641,14 @@ def _bed_canvas(bed, plantings, margin_in):
         Rect(width_in, length_in, cls="grid-bg-detail"),
         Rect(width_in, length_in, cls="bed-boundary"),
         G(id="shade-layer"),
-        G(*[_planting_dot(p) for p in plantings if p["x_in"] is not None], id="planted-layer"),
+        G(
+            *[
+                el
+                for p in _sort_plantings_for_z_order([p for p in plantings if p["x_in"] is not None])
+                for el in _planting_dot_elements(p)
+            ],
+            id="planted-layer",
+        ),
         G(id="lattice-layer"),
         G(id="staged-layer"),
         viewBox=f"{-margin_in} {-margin_in} {width_in + 2 * margin_in} {length_in + 2 * margin_in}",
