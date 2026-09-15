@@ -372,12 +372,14 @@ class FarmDatabaseMixin:
             db_connection.execute(text("DELETE FROM seed_varieties WHERE id = :id"), {"id": variety_id})
 
     def list_seed_varieties_with_seed_stock(self):
-        "Existence-only gating (phase 4): any seed_lots row at all, regardless of quantity_on_hand."
+        """Existence gating (phase 4): a seed_lots row whose quantity_on_hand is untracked (NULL, since the
+        field is optional) or positive. Excludes a lot explicitly recorded as exhausted (quantity_on_hand = 0)."""
         with self.engine.connect() as db_connection:
             return db_connection.execute(
                 text(
                     f"SELECT {_SEED_VARIETY_COLUMNS} FROM seed_varieties sv WHERE EXISTS "
-                    "(SELECT 1 FROM seed_lots sl WHERE sl.variety_id = sv.id) "
+                    "(SELECT 1 FROM seed_lots sl WHERE sl.variety_id = sv.id "
+                    "AND (sl.quantity_on_hand IS NULL OR sl.quantity_on_hand > 0)) "
                     "ORDER BY common_name, name"
                 )
             ).mappings().all()

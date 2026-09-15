@@ -501,6 +501,51 @@ def test_inventory_page_shows_empty_states_when_none_exist(client):
     assert "No transplant lots yet" in response.text
 
 
+def test_inventory_page_hides_zero_quantity_seed_lot_by_default(client):
+    variety_id = _create_variety(client)
+    client.post(
+        "/seed-lots", data={"variety_id": str(variety_id), "quantity_on_hand": "0", "seed_source": "DepletedSeed"}
+    )
+    response = client.get("/inventory")
+    assert "DepletedSeed" not in response.text
+
+
+def test_inventory_page_shows_zero_quantity_seed_lot_when_show_depleted_requested(client):
+    variety_id = _create_variety(client)
+    client.post(
+        "/seed-lots", data={"variety_id": str(variety_id), "quantity_on_hand": "0", "seed_source": "DepletedSeed"}
+    )
+    response = client.get("/inventory?show_depleted=1")
+    assert "DepletedSeed" in response.text
+
+
+def test_inventory_page_hides_zero_quantity_transplant_lot_by_default(client):
+    variety_id = _create_variety(client)
+    client.post(
+        "/transplant-lots",
+        data={"variety_id": str(variety_id), "quantity_on_hand": "0", "purchased_vendor": "DepletedVendor"},
+    )
+    response = client.get("/inventory")
+    assert "DepletedVendor" not in response.text
+
+
+def test_inventory_page_shows_zero_quantity_transplant_lot_when_show_depleted_requested(client):
+    variety_id = _create_variety(client)
+    client.post(
+        "/transplant-lots",
+        data={"variety_id": str(variety_id), "quantity_on_hand": "0", "purchased_vendor": "DepletedVendor"},
+    )
+    response = client.get("/inventory?show_depleted=1")
+    assert "DepletedVendor" in response.text
+
+
+def test_inventory_page_keeps_untracked_quantity_seed_lot_visible_by_default(client):
+    variety_id = _create_variety(client)
+    client.post("/seed-lots", data={"variety_id": str(variety_id), "seed_source": "UntrackedSeed"})
+    response = client.get("/inventory")
+    assert "UntrackedSeed" in response.text
+
+
 def test_add_seed_lot_redirects_with_303(client):
     variety_id = _create_variety(client)
     response = client.post(
@@ -687,6 +732,19 @@ def test_add_planting_redirects_with_303(client):
         "/plantings", data={"variety_id": str(variety_id), "planted_date": "2026-05-01"}, follow_redirects=False
     )
     assert response.status_code == 303
+
+
+def test_plantings_page_includes_id_column_header(client):
+    response = client.get("/plantings")
+    assert "<th>ID</th>" in response.text
+
+
+def test_plantings_page_shows_planting_id_in_its_row(client):
+    variety_id = _create_variety(client)
+    client.post("/plantings", data={"variety_id": str(variety_id), "planted_date": "2026-05-01"})
+    planting_id = db.list_plantings()[0]["id"]
+    response = client.get("/plantings")
+    assert f"<td>{planting_id}</td>" in response.text
 
 
 def test_add_planting_appears_in_list(client):

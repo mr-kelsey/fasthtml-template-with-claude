@@ -236,6 +236,14 @@ dialog#event-dialog {
 .resize-handle {
     fill: var(--pico-primary);
     cursor: nwse-resize;
+    /* Invisible stroke with a non-scaling-stroke vector-effect (set as a presentation
+       attribute in land_plots.py, since the CSS property alone isn't universally honored)
+       gives the handle a constant ~12px on-screen hit margin regardless of the map's zoom,
+       without enlarging the painted 1ft square itself. pointer-events: all makes that
+       margin clickable even though the stroke paints nothing. */
+    stroke: transparent;
+    stroke-width: 12px;
+    pointer-events: all;
 }
 
 .unplaced-bed-item {

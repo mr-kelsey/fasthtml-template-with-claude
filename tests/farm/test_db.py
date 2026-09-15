@@ -1020,10 +1020,22 @@ def test_update_planting_changes_soil_temp_f():
     assert db.get_planting(planting_id)["soil_temp_f"] == 70.0
 
 
-def test_list_seed_varieties_with_seed_stock_includes_variety_with_any_lot():
+def test_list_seed_varieties_with_seed_stock_includes_variety_with_untracked_quantity_lot():
+    variety_id = _add_variety()
+    db.add_seed_lot(variety_id, quantity_on_hand=None)
+    assert [v["id"] for v in db.list_seed_varieties_with_seed_stock()] == [variety_id]
+
+
+def test_list_seed_varieties_with_seed_stock_includes_variety_with_positive_quantity_lot():
+    variety_id = _add_variety()
+    db.add_seed_lot(variety_id, quantity_on_hand=5)
+    assert [v["id"] for v in db.list_seed_varieties_with_seed_stock()] == [variety_id]
+
+
+def test_list_seed_varieties_with_seed_stock_excludes_variety_with_only_zero_quantity_lot():
     variety_id = _add_variety()
     db.add_seed_lot(variety_id, quantity_on_hand=0)
-    assert [v["id"] for v in db.list_seed_varieties_with_seed_stock()] == [variety_id]
+    assert db.list_seed_varieties_with_seed_stock() == []
 
 
 def test_list_seed_varieties_with_seed_stock_excludes_variety_without_a_lot():

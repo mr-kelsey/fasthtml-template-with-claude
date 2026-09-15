@@ -160,6 +160,7 @@ def _planting_row(planting, warnings):
     germination_window = compute_window(planting["planted_date"], planting["germination_days_min"], planting["germination_days_max"])
     harvest_window = compute_window(planting["planted_date"], planting["days_to_maturity_min"], planting["days_to_maturity_max"])
     return fast.Tr(
+        fast.Td(planting["id"]),
         fast.Td(planting["variety_name"] or ""),
         fast.Td(planting["common_name"] or ""),
         fast.Td(planting["planted_date"]),
@@ -186,7 +187,7 @@ def list_plantings_page():
     plantings = db.list_plantings()
     warnings = _overlap_warnings(plantings)
     headers = [
-        "Variety", "Common Name", "Planted", "Bed", "Qty", "Germinated",
+        "ID", "Variety", "Common Name", "Planted", "Bed", "Qty", "Germinated",
         "Germination window", "Harvest window", "Warnings", "",
     ]
     rows = (

@@ -125,11 +125,20 @@ def _transplant_lot_row(lot):
 
 
 @router("/inventory", methods=["get"])
-def inventory_page():
+def inventory_page(show_depleted: str = ""):
+    show_depleted = show_depleted == "1"
     varieties = db.list_seed_varieties()
     plantings = db.list_plantings()
     seed_lots = db.list_seed_lots()
     transplant_lots = db.list_transplant_lots()
+    if not show_depleted:
+        seed_lots = [lot for lot in seed_lots if lot["quantity_on_hand"] != 0]
+        transplant_lots = [lot for lot in transplant_lots if lot["quantity_on_hand"] != 0]
+    depleted_toggle = (
+        fast.A("Show depleted lots", href="/inventory?show_depleted=1")
+        if not show_depleted
+        else fast.A("Hide depleted lots", href="/inventory")
+    )
 
     seed_headers = ["Variety", "Qty on hand", "Acquired", "Source", "Notes", ""]
     seed_rows = (
@@ -171,6 +180,7 @@ def inventory_page():
     return layout(
         "Inventory",
         fast.H1("Inventory"),
+        fast.P(depleted_toggle),
         fast.H2("Seed Lots"),
         *seed_add_section,
         seed_table,

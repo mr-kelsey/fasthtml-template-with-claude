@@ -105,6 +105,28 @@ def test_resizing_a_bed_persists_its_new_dimensions(page, live_server_url):
     assert (bed["width_ft"], bed["length_ft"]) == (6, 5)
 
 
+def test_clicking_just_outside_the_exact_handle_box_still_resizes_at_low_zoom(page, live_server_url):
+    plot_id = _make_plot(width_ft=100, length_ft=100)
+    bed_id = _make_bed(plot_id, width_ft=4, length_ft=4, x=2, y=2)
+    page.goto(f"{live_server_url}/land-plots/{plot_id}/map")
+
+    # Handle's exact 1ft box spans feet (5,5)-(6,6), center (5.5,5.5); on a 100ft-wide plot
+    # that's only a few screen pixels. Click 4px past the box's right edge -- inside the
+    # invisible, constant-pixel hit margin the enlarged handle adds, but outside the exact
+    # painted 1ft square -- to prove hit-testing isn't limited to that tiny geometry.
+    center_x, center_y = _svg_click_point(page, 100, 100, 5.5, 5.5)
+    px_per_ft_x, _ = _js_naive_scale(page, 100, 100)
+    handle_x, handle_y = center_x + (0.5 * px_per_ft_x) + 4, center_y
+    page.mouse.move(handle_x, handle_y)
+    page.mouse.down()
+    page.mouse.move(handle_x + 2 * px_per_ft_x, handle_y, steps=5)
+    with page.expect_response(lambda r: f"/beds/{bed_id}/size" in r.url):
+        page.mouse.up()
+
+    bed = db.get_bed(bed_id)
+    assert bed["width_ft"] > 4
+
+
 def _drag_with_stubbed_position_failure(page, live_server_url):
     plot_id = _make_plot()
     bed_id = _make_bed(plot_id, x=2, y=2)

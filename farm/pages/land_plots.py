@@ -290,7 +290,10 @@ def _bed_group(bed):
             cls="bed-label", font_size=font_size or LABEL_FONT_MIN,
             style="display:none" if font_size is None else None,
         ),
-        Rect(1, 1, x=bed["width_ft"] - 1, y=bed["length_ft"] - 1, cls="resize-handle"),
+        Rect(
+            1, 1, x=bed["width_ft"] - 1, y=bed["length_ft"] - 1, cls="resize-handle",
+            vector_effect="non-scaling-stroke",
+        ),
         id=f"bed-{bed['id']}",
         cls="bed-group",
         transform=f"translate({x},{y}) rotate({bed['rotation_deg']},{center_x},{center_y})",
