@@ -191,6 +191,108 @@ def test_clicking_an_unblocked_lattice_point_beyond_spacing_stages_it(page, live
     assert page.locator('#staged-layer circle[cx="24"][cy="24"]').count() == 1
 
 
+def _variety_id_by_name(common_name):
+    "list_seed_varieties()[0] (as _make_variety uses) silently grabs the wrong row once more than "
+    "one variety exists, since it's ordered alphabetically by common_name -- look up by name instead."
+    return [v["id"] for v in db.list_seed_varieties() if v["common_name"] == common_name][0]
+
+
+def test_stamping_a_transplant_on_an_existing_seed_plantings_exact_point_is_blocked(page, live_server_url):
+    "No two plants -- any variety, any source type -- can share the exact same hole (see "
+    "point_is_occupied in static/bed-detail.js), independent of the same-variety spacing guard."
+    bed_id = _make_bed(width_ft=2, length_ft=2)
+    _make_variety(common_name="Tomato", name="Cherokee Purple", spacing_in=8)
+    seed_variety_id = _variety_id_by_name("Tomato")
+    _add_seed_lot(seed_variety_id)
+    db.add_planting(seed_variety_id, "2026-05-01", bed_id=bed_id, x_in=8, y_in=8, source_type="seed")
+
+    _make_variety(common_name="Pepper", name="Bell", spacing_in=8)
+    transplant_variety_id = _variety_id_by_name("Pepper")
+    _add_transplant_lot(transplant_variety_id, quantity_on_hand=10)
+
+    page.goto(f"{live_server_url}/beds/{bed_id}")
+    page.locator("#mode-transplant").check()
+    page.locator(f'.variety-palette-item[data-variety-id="{transplant_variety_id}"][data-mode="transplant"]').click()
+
+    exact_point = page.locator('#lattice-layer circle[cx="8"][cy="8"]')
+    assert "blocked" in exact_point.get_attribute("class")
+
+
+def test_stamping_a_seed_on_an_existing_transplants_exact_point_is_blocked(page, live_server_url):
+    bed_id = _make_bed(width_ft=2, length_ft=2)
+    _make_variety(common_name="Pepper", name="Bell", spacing_in=8)
+    transplant_variety_id = _variety_id_by_name("Pepper")
+    _add_transplant_lot(transplant_variety_id, quantity_on_hand=10)
+    db.add_planting(transplant_variety_id, "2026-05-01", bed_id=bed_id, x_in=8, y_in=8, source_type="transplant")
+
+    _make_variety(common_name="Tomato", name="Cherokee Purple", spacing_in=8)
+    seed_variety_id = _variety_id_by_name("Tomato")
+    _add_seed_lot(seed_variety_id)
+
+    page.goto(f"{live_server_url}/beds/{bed_id}")
+    _arm_seed_variety(page, seed_variety_id)
+
+    exact_point = page.locator('#lattice-layer circle[cx="8"][cy="8"]')
+    assert "blocked" in exact_point.get_attribute("class")
+
+
+def test_stamping_a_different_seed_variety_on_an_exact_point_is_blocked(page, live_server_url):
+    "Two different seed varieties can be planted near each other (companion interplanting), but not "
+    "literally in the same hole -- the same-variety spacing guard alone wouldn't catch this since "
+    "Tomato and Basil have different variety_ids."
+    bed_id = _make_bed(width_ft=2, length_ft=2)
+    _make_variety(common_name="Tomato", name="Cherokee Purple", spacing_in=8)
+    tomato_id = _variety_id_by_name("Tomato")
+    _make_variety(common_name="Basil", name="Genovese", spacing_in=8)
+    basil_id = _variety_id_by_name("Basil")
+    _add_seed_lot(tomato_id)
+    _add_seed_lot(basil_id)
+    db.add_planting(tomato_id, "2026-05-01", bed_id=bed_id, x_in=8, y_in=8, source_type="seed")
+
+    page.goto(f"{live_server_url}/beds/{bed_id}")
+    _arm_seed_variety(page, basil_id)
+
+    exact_point = page.locator('#lattice-layer circle[cx="8"][cy="8"]')
+    assert "blocked" in exact_point.get_attribute("class")
+
+
+def test_stamping_a_different_transplant_variety_on_an_exact_point_is_blocked(page, live_server_url):
+    bed_id = _make_bed(width_ft=2, length_ft=2)
+    _make_variety(common_name="Tomato", name="Cherokee Purple", spacing_in=8)
+    tomato_id = _variety_id_by_name("Tomato")
+    _make_variety(common_name="Pepper", name="Bell", spacing_in=8)
+    pepper_id = _variety_id_by_name("Pepper")
+    _add_transplant_lot(tomato_id, quantity_on_hand=10)
+    _add_transplant_lot(pepper_id, quantity_on_hand=10)
+    db.add_planting(tomato_id, "2026-05-01", bed_id=bed_id, x_in=8, y_in=8, source_type="transplant")
+
+    page.goto(f"{live_server_url}/beds/{bed_id}")
+    page.locator("#mode-transplant").check()
+    page.locator(f'.variety-palette-item[data-variety-id="{pepper_id}"][data-mode="transplant"]').click()
+
+    exact_point = page.locator('#lattice-layer circle[cx="8"][cy="8"]')
+    assert "blocked" in exact_point.get_attribute("class")
+
+
+def test_stamping_a_different_variety_near_but_not_on_an_occupied_point_is_still_allowed(page, live_server_url):
+    "Companion interplanting nearby (not in the literal same hole) is unaffected by the occupied-hole "
+    "check -- only an exact-position collision blocks across varieties."
+    bed_id = _make_bed(width_ft=2, length_ft=2)
+    _make_variety(common_name="Tomato", name="Cherokee Purple", spacing_in=8)
+    tomato_id = _variety_id_by_name("Tomato")
+    _make_variety(common_name="Basil", name="Genovese", spacing_in=8)
+    basil_id = _variety_id_by_name("Basil")
+    _add_seed_lot(tomato_id)
+    _add_seed_lot(basil_id)
+    db.add_planting(tomato_id, "2026-05-01", bed_id=bed_id, x_in=8, y_in=8, source_type="seed")
+
+    page.goto(f"{live_server_url}/beds/{bed_id}")
+    _arm_seed_variety(page, basil_id)
+
+    far_point = page.locator('#lattice-layer circle[cx="24"][cy="24"]')
+    assert "blocked" not in far_point.get_attribute("class")
+
+
 def test_companion_relation_tints_an_occupied_point_green(page, live_server_url):
     bed_id = _make_bed(width_ft=2, length_ft=2)
     tomato_id = _make_variety(common_name="Tomato", name="Cherokee Purple", spacing_in=8)

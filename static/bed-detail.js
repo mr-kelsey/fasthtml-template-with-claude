@@ -105,12 +105,23 @@
         return persisted.concat(staged);
     }
 
+    function point_is_occupied(point) {
+        // No two plants -- any variety, any source type -- can physically share the exact same
+        // hole. This is deliberately separate from (and ignores variety_id unlike) the same-variety
+        // spacing guard above: different varieties may still be planted near each other for
+        // companion interplanting, just not at the literal same point.
+        for (var i = 0; i < data.plantings.length; i++) {
+            if (distance_in(point, data.plantings[i]) < 1e-6) return true;
+        }
+        return false;
+    }
+
     function is_blocked(point, variety_id, spacing_in) {
         var occupied = same_variety_points(variety_id);
         for (var i = 0; i < occupied.length; i++) {
             if (distance_in(point, occupied[i]) < spacing_in) return true;
         }
-        return false;
+        return point_is_occupied(point);
     }
 
     function lattice_start(offset_in, spacing_in) {
